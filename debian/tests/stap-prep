@@ -1,0 +1,4 @@
+#!/bin/sh
+
+stap-prep
+stapbpf $(stap --runtime=bpf -p4 -e 'probe begin { printf("hello world\n") ; exit() }') | grep -q '^hello world$'

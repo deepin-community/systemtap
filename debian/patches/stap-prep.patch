@@ -1,0 +1,17 @@
+diff --git a/stap-prep b/stap-prep
+index fd0c7e83b..84040fc2c 100755
+--- a/stap-prep
++++ b/stap-prep
+@@ -114,7 +114,11 @@ esac
+     echo "linux-image-$ABINAME = $VERSION"
+     echo "linux-headers-$ABINAME = $VERSION"
+     if [ "$DEBUGINFOD" -eq 0 ]; then # add dbgsym search if not already 
+-        echo "linux-image-$ABINAME-dbgsym = $VERSION"
++        if [ "$DISTRO" = "Debian" ]; then
++	        echo "linux-image-$ABINAME-dbg = $VERSION"
++        else
++            echo "linux-image-$ABINAME-dbgsym = $VERSION"
++        fi
+     fi
+ ) | while read package relation requiredversion; do
+     installedversion="$(dpkg-query -W "$package" 2> /dev/null | cut -f 2)"

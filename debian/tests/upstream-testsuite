@@ -1,0 +1,7 @@
+#!/bin/sh
+
+stap-prep
+
+./configure --prefix=/usr
+make installcheck-parallel
+cat testsuite/systemtap.sum

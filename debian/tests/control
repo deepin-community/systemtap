@@ -1,0 +1,15 @@
+Tests: stap-prep
+Depends: systemtap, apt-utils
+Restrictions: needs-root isolation-machine
+
+Tests: upstream-testsuite
+Depends: systemtap, systemtap-sdt-dev, dejagnu, libnss3-dev, libnspr4-dev
+Restrictions: needs-root rw-build-tree flaky isolation-machine
+
+Tests: build-hello
+Depends: systemtap
+Restrictions: rw-build-tree allow-stderr needs-root
+
+Tests: list-coreutils-probe-points
+Depends: systemtap, coreutils-dbgsym
+Restrictions: needs-root

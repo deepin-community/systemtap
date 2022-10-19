@@ -1,0 +1,8 @@
+#!/bin/sh
+
+arch="$(uname -r | egrep -o '[a-z0-9]+$')"
+apt-get -y install linux-headers-${arch} linux-image-${arch}-dbg
+
+target_kernel="$(dpkg -l linux-headers-\* | awk '/^ii/ { print $2 ; exit }' | sed s/linux-headers-//)"
+
+stap -v -p 4 -r "$target_kernel" -e 'probe oneshot { println("hello world") }' -m hello

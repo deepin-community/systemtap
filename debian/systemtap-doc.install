@@ -1,0 +1,7 @@
+usr/share/doc/systemtap/* usr/share/doc/systemtap-doc
+usr/share/man/man3
+usr/share/man/man7
+usr/share/man/cs
+usr/share/man/man1/stapref.1
+usr/share/man/man8/systemtap-service.8
+usr/share/systemtap/examples

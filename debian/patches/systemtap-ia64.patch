@@ -1,0 +1,25 @@
+--- a/includes/sys/sdt.h
++++ b/includes/sys/sdt.h
+@@ -86,6 +86,8 @@
+ # ifndef STAP_SDT_ARG_CONSTRAINT
+ # if defined __powerpc__
+ # define STAP_SDT_ARG_CONSTRAINT        nZr
++# elif defined __ia64__
++# define STAP_SDT_ARG_CONSTRAINT        nr
+ # else
+ # define STAP_SDT_ARG_CONSTRAINT        nor
+ # endif
+--- systemtap-4.3.orig/python/HelperSDT/_HelperSDT.c
++++ systemtap-4.3/python/HelperSDT/_HelperSDT.c
+@@ -236,7 +236,11 @@ init_HelperSDT(void)
+ 	// it with the asm() statement. Otherwise we get a @GOTPCREL
+ 	// reference which stap can't parse.
+ 	void *fptr = &PyObject_GenericGetAttr;
++#ifdef __ia64__
++	asm ("nop 0" : "=r"(fptr) : "r"(fptr));
++#else
+ 	asm ("nop" : "=r"(fptr) : "r"(fptr));
++#endif
+ 	STAP_PROBE2(PROVIDER, Init, stap_module, fptr);
+     }
+     return module;

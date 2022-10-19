@@ -1,0 +1,83 @@
+#!/usr/bin/make -f
+
+VIM_ADIR = $(CURDIR)/debian/tmp/usr/share/vim/addons
+VIM_RDIR = $(CURDIR)/debian/tmp/usr/share/vim/registry
+
+EMACS_ADIR = $(CURDIR)/debian/tmp/usr/share/emacs/site-lisp/systemtap-common
+
+CONF_FLAGS = --enable-sqlite --disable-crash --disable-pie \
+	     --enable-docs --enable-htmldocs --enable-refdocs \
+	     --enable-server --without-rpm --disable-silent-rules \
+	     --enable-translator --disable-publican --with-python3 \
+	     --libexecdir=/usr/lib $(shell dpkg-buildflags --export=configure)
+
+DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+
+# Building of man pages takes A LOT of time
+ifeq (,$(filter stap_disable_refdocs,$(DEB_BUILD_OPTIONS)))
+	CONF_FLAGS += --enable-refdocs
+else
+	CONF_FLAGS += --disable-refdocs
+endif
+
+ifeq (,$(filter systemtap-runtime,$(shell dh_listpackages -a)))
+  sdt_only := yes
+endif
+
+export FORCE_SOURCE_DATE=1
+
+%:
+	dh $@ --with autoreconf
+
+override_dh_auto_test:
+	# Tests cannot be run during build, see #526957
+
+override_dh_auto_configure:
+	dh_auto_configure -- $(CONF_FLAGS)
+
+override_dh_auto_install:
+	dh_auto_install
+
+	# Install vim files
+	install -m 644 -D vim/ftdetect/stp.vim $(VIM_ADIR)/ftdetect/stp.vim
+	install -m 644 -D vim/ftplugin/stp.vim $(VIM_ADIR)/ftplugin/stp.vim
+	install -m 644 -D vim/indent/stp.vim $(VIM_ADIR)/indent/stp.vim
+	install -m 644 -D vim/syntax/stp.vim $(VIM_ADIR)/syntax/stp.vim
+	install -m 644 -D $(CURDIR)/debian/systemtap.yaml $(VIM_RDIR)/systemtap.yaml
+
+	# Install emacs files
+	install -m 644 -D emacs/systemtap-init.el $(EMACS_ADIR)/systemtap-init.el
+	install -m 644 -D emacs/systemtap-mode.el $(EMACS_ADIR)/systemtap-mode.el
+
+	# Install stap-prep
+	install -D stap-prep $(CURDIR)/debian/tmp/usr/bin/stap-prep
+
+	# Make all examples not executable. Some of them could be, but
+	# this is not consistently enforced.
+	find debian/tmp/usr/share/doc/systemtap*/examples/ -type f -executable | xargs --no-run-if-empty chmod -x
+
+	# Remove empty file to make lintian happy, patch sent to xmlto upstream
+	rm -f debian/tmp/usr/share/doc/systemtap/tapsets/tapsets.proc
+
+override_dh_install:
+	dh_install
+ifeq ($(sdt_only),yes)
+	install -m 755 -D dtrace debian/systemtap-sdt-dev/usr/bin/dtrace
+	install -m 644 -D man/dtrace.1 debian/systemtap-sdt-dev/usr/share/man/man1/dtrace.1
+	mkdir -p debian/systemtap-sdt-dev/usr/include/$(DEB_HOST_MULTIARCH)/sys
+	install -m 644 includes/sys/*.h \
+		debian/systemtap-sdt-dev/usr/include/$(DEB_HOST_MULTIARCH)/sys/.
+else
+	mkdir -p debian/systemtap-sdt-dev/usr/include/$(DEB_HOST_MULTIARCH)
+	mv debian/systemtap-sdt-dev/usr/include/sys \
+		debian/systemtap-sdt-dev/usr/include/$(DEB_HOST_MULTIARCH)/.
+endif
+
+override_dh_compress:
+	dh_compress -X.stp -X.wav -Xsocktop -Xsyscalltimes -X.pdf
+
+override_dh_fixperms:
+	dh_fixperms
+ifneq ($(sdt_only),yes)
+	chmod 4754 debian/systemtap-runtime/usr/bin/staprun
+endif
