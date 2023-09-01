@@ -38,7 +38,7 @@
            		<li><a href="keyword-index.html">By Keyword</a></li>
          	</ul>
 
-<p><em>For systemtap version 4.5.</em></p><h2>Best Examples</h2>
+<p><em>For systemtap version 4.8.</em></p><h2>Best Examples</h2>
 <ul>
 <li><a href="#general/helloworld.stp">general/helloworld.stp - SystemTap "Hello World" Program</a></li>
 <li><a href="#general/para-callgraph.stp">general/para-callgraph.stp - Callgraph Tracing with Arguments</a></li>
@@ -59,7 +59,7 @@
 <li><a href="#virtualization/kvm_service_time.stp">virtualization/kvm_service_time.stp - Time Statistics on KVM Exit Reasons</a></li>
 </ul>
 
-<h2>All 191 Examples</h2>
+<h2>All 194 Examples</h2>
 <ul>
 <li><a name="apps/gmalloc_watch.stp"></a><a href="#apps/gmalloc_watch.stp">&para;</a> <a href="apps/gmalloc_watch.stp">apps/gmalloc_watch.stp</a> - Tracing glib2 memory allocations<br>
 keywords: <a href="keyword-index.html#TRACE">TRACE</a> <br>
@@ -126,13 +126,14 @@ keywords: <a href="keyword-index.html#TRACE">TRACE</a> <a href="keyword-index.ht
 </li><li><a name="general/para-callgraph.stp"></a><a href="#general/para-callgraph.stp">&para;</a> <a href="general/para-callgraph.stp">general/para-callgraph.stp</a> - Callgraph Tracing with Arguments<br>
 keywords: <a href="keyword-index.html#_BEST">_BEST</a> <a href="keyword-index.html#TRACE">TRACE</a> <a href="keyword-index.html#CALLGRAPH">CALLGRAPH</a> <br>
 <p>Print a timed per-thread microsecond-timed callgraph, complete with function parameters and return values.  The first parameter names the function probe points to trace.  The optional second parameter names the probe points for trigger functions, which acts to enable tracing for only those functions that occur while the current thread is nested within the trigger.</p><p><i><a href="general/para-callgraph.txt">sample usage in general/para-callgraph.txt</i></font></p>
-</li><li><a name="general/py2example.stp"></a><a href="#general/py2example.stp">&para;</a> <a href="general/py2example.stp">general/py2example.stp</a> - SystemTap python 2 support tapset<br>
+</li><li><a name="general/pyexample.stp"></a><a href="#general/pyexample.stp">&para;</a> <a href="general/pyexample.stp">general/pyexample.stp</a> - SystemTap python 2 support tapset<br>
 keywords: <a href="keyword-index.html#SIMPLE">SIMPLE</a> <br>
-<p>A python support tapset that displays backtraces and variable values </p><p><font size="-2"><pre># stap -I tapset -c &#39;/usr/bin/python2 pyexample.py 35&#39; py2example.stp</pre></font></p>
-</li><li><a name="general/py3example.stp"></a><a href="#general/py3example.stp">&para;</a> <a href="general/py3example.stp">general/py3example.stp</a> - SystemTap python 3 support tapset<br>
+<p>A python support tapset that displays backtraces and variable values</p><p><font size="-2"><pre># PYTHONPATH=$PYEXECDIR stap -g --suppress-time-limits -c \
+&#39;/usr/bin/python3 -m HelperSDT pyexample.py 35&#39; pyexample.stp python2</pre></font></p>
+</li><li><a name="general/pyexample.stp"></a><a href="#general/pyexample.stp">&para;</a> <a href="general/pyexample.stp">general/pyexample.stp</a> - SystemTap python 3 support tapset<br>
 keywords: <a href="keyword-index.html#SIMPLE">SIMPLE</a> <br>
-<p>A python support tapset that displays backtraces and variable values</p><p><font size="-2"><pre># stap -g --suppress-time-limits -I tapset -c &#39;/usr/bin/python3 \
-pyexample.py 35&#39; py3example.stp</pre></font></p>
+<p>A python support tapset that displays backtraces and variable values</p><p><font size="-2"><pre># PYTHONPATH=$PYEXECDIR stap -g --suppress-time-limits -c \
+&#39;/usr/bin/python3 -m HelperSDT pyexample.py 35&#39; pyexample.stp python3</pre></font></p>
 </li><li><a name="general/regex.stp"></a><a href="#general/regex.stp">&para;</a> <a href="general/regex.stp">general/regex.stp</a> - Report opened files whose names match a given regex<br>
 keywords: <a href="keyword-index.html#REGEX">REGEX</a> <br>
 <p>Uses the regex functionality to detect opened files whose names match a pattern given on the command line. If no command line parameter is given, demonstrate by filtering for files that end with an extension showing them to be an archive.</p><p><font size="-2"><pre># stap regex.stp -T 1</pre></font></p>
@@ -146,7 +147,7 @@ keywords: <a href="keyword-index.html#STATISTICS">STATISTICS</a> <a href="keywor
 keywords: <a href="keyword-index.html#SOCKET">SOCKET</a> <a href="keyword-index.html#SYSCALL">SYSCALL</a> <br>
 <p>Prints the life cycle of all sockets associated with a process. This includes bytes and timing. The timing information that is tracked includes event completion relative to the start of said event and the end of the previous event. Currently tracks read, write, recv, send, connect and close.</p><p><font size="-2"><pre># stap socket-events.stp</pre></font></p>
 </li><li><a name="general/stopwatches.stp"></a><a href="#general/stopwatches.stp">&para;</a> <a href="general/stopwatches.stp">general/stopwatches.stp</a> - See the amount of wall clock time a process spends in various states<br>
-keywords: <a href="keyword-index.html#TIME">TIME</a> <br>
+keywords: <a href="keyword-index.html#TIME">TIME</a> <a href="keyword-index.html#BPF">BPF</a> <br>
 <p>The stopwatch.stp script illustrates how to use multiple stopwatches record how much wallclock time a process spends in kernel- and user-space.  On exit the script prints out the time in seconds, milliseconds, microseconds, and nanoseconds. Note that this output of this script is not directly comparable to the time command because time records the time that the process is actually active in kernel- and user-space.</p><p><font size="-2"><pre># stap stopwatches.stp -T 1</pre></font></p>
 </li><li><a name="general/tcl-funtop.stp"></a><a href="#general/tcl-funtop.stp">&para;</a> <a href="general/tcl-funtop.stp">general/tcl-funtop.stp</a> - Profile Tcl calls<br>
 keywords: <a href="keyword-index.html#PROFILING">PROFILING</a> <br>
@@ -224,6 +225,9 @@ keywords: <a href="keyword-index.html#IO">IO</a> <a href="keyword-index.html#SIM
 </li><li><a name="io/switchfile.stp"></a><a href="#io/switchfile.stp">&para;</a> <a href="io/switchfile.stp">io/switchfile.stp</a> - Switch log files<br>
 keywords: <a href="keyword-index.html#IO">IO</a> <br>
 <p>Every second print a log message and switch log files every 5 seconds.</p><p><font size="-2"><pre># stap -o /tmp/switchfile.stp.out switchfile.stp -T 8</pre></font></p>
+</li><li><a name="io/traceaio.stp"></a><a href="#io/traceaio.stp">&para;</a> <a href="io/traceaio.stp">io/traceaio.stp</a> - Trace calls to io_submit<br>
+keywords: <a href="keyword-index.html#IO">IO</a> <br>
+<p>Trace calls to io_submit, logging iocbs and iovecs.</p><p><i><a href="io/traceaio.txt">sample usage in io/traceaio.txt</i></font></p>
 </li><li><a name="io/traceio.stp"></a><a href="#io/traceio.stp">&para;</a> <a href="io/traceio.stp">io/traceio.stp</a> - Track Cumulative IO Activity by Process Name<br>
 keywords: <a href="keyword-index.html#IO">IO</a> <br>
 <p>Every second print out the top ten executables sorted in descending order based on cumulative I/O traffic observed.</p><p><font size="-2"><pre># stap traceio.stp -T 1</pre></font></p>
@@ -615,6 +619,12 @@ keywords: <a href="keyword-index.html#SECURITY">SECURITY</a> <a href="keyword-in
 keywords: <a href="keyword-index.html#SECURITY">SECURITY</a> <a href="keyword-index.html#GURU">GURU</a> <br>
 <p>historical emergency security band-aid, for reference/education only</p></p>
 </li><li><a name="security-band-aids/cve-2018-6485.stp"></a><a href="#security-band-aids/cve-2018-6485.stp">&para;</a> <a href="security-band-aids/cve-2018-6485.stp">security-band-aids/cve-2018-6485.stp</a> - cve-2018-6485 security band-aid<br>
+keywords: <a href="keyword-index.html#SECURITY">SECURITY</a> <a href="keyword-index.html#GURU">GURU</a> <br>
+<p>historical emergency security band-aid, for reference/education only</p></p>
+</li><li><a name="security-band-aids/cve-2021-4034.stp"></a><a href="#security-band-aids/cve-2021-4034.stp">&para;</a> <a href="security-band-aids/cve-2021-4034.stp">security-band-aids/cve-2021-4034.stp</a> - cve-2021-4034 security band-aid<br>
+keywords: <a href="keyword-index.html#SECURITY">SECURITY</a> <a href="keyword-index.html#GURU">GURU</a> <br>
+<p>historical emergency security band-aid, for reference/education only</p></p>
+</li><li><a name="security-band-aids/cve-2021-4155.stp"></a><a href="#security-band-aids/cve-2021-4155.stp">&para;</a> <a href="security-band-aids/cve-2021-4155.stp">security-band-aids/cve-2021-4155.stp</a> - cve-2021-4155 security band-aid<br>
 keywords: <a href="keyword-index.html#SECURITY">SECURITY</a> <a href="keyword-index.html#GURU">GURU</a> <br>
 <p>historical emergency security band-aid, for reference/education only</p></p>
 </li><li><a name="stapgames/2048.stp"></a><a href="#stapgames/2048.stp">&para;</a> <a href="stapgames/2048.stp">stapgames/2048.stp</a> - 2048<br>

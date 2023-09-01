@@ -20,8 +20,11 @@
 # pylint: disable=R0201
 # pylint: disable=R0904
 
+import hashlib
 import os
 import sys
+import time
+import atexit
 from shlex import split
 from subprocess import call
 from tempfile import mkstemp
@@ -359,7 +362,7 @@ def main():
     if s_filename != "" and use_cpp:
         (ignore, fname) = mkstemp(suffix=".d")
         cpp = os.environ.get("CPP", "cpp")
-        retcode = call(split(cpp) + includes + defines + [s_filename, fname])
+        retcode = call(split(cpp) + includes + defines + [s_filename, '-o', fname])
         if retcode != 0:
             print("\"cpp includes s_filename\" failed")
             usage()
@@ -410,12 +413,26 @@ def main():
         else:
             print("header: " + fname)
 
-        try: # for reproducible-builds purposes, prefer a fixed path name pattern
-            fname = filename + ".dtrace-temp.c"
-            fdesc = open(fname, mode='w')
-        except: # but that doesn't work for  -o /dev/null - see rhbz1504009
-            (ignore,fname) = mkstemp(suffix=".c")
-            fdesc = open(fname, mode='w')
+        # for reproducible-builds purposes, use a predictable tmpfile path
+        sha = hashlib.sha256()
+        sha.update(s_filename.encode('utf-8'))
+        sha.update(filename.encode('utf-8'))
+        fname = ".dtrace-temp." + sha.hexdigest()[:8] + ".c"
+        tries = 0
+        while True:
+            tries += 1
+            if tries > 100: # if file exists due to previous crash or whatever
+                print("cannot create temporary file \""+fname+"\"")
+                return 1
+            try:
+                wxmode = 'x' if sys.version_info > (3,0) else 'wx'
+                fdesc = open(fname, mode=wxmode)
+                if not keep_temps:
+                   atexit.register(os.remove, fname) # delete generated source at exit, even if error
+                break
+            except:
+                time.sleep(0.1) # vague estimate of elapsed time for concurrent identical gcc job
+                pass # Try again
         providers.semaphore_write(fdesc)
         fdesc.close()
         cc1 = os.environ.get("CC", "gcc")
@@ -428,9 +445,7 @@ def main():
             print("\"gcc " + fname + "\" failed")
             usage()
             return 1
-        if not keep_temps:
-            os.remove(fname)
-        else:
+        if keep_temps:
             print("source: " + fname)
 
     if use_cpp:

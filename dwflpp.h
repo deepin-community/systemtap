@@ -32,6 +32,24 @@
 #define EM_AARCH64 183
 #endif
 
+#ifndef EM_RISCV
+#define EM_RISCV 243
+#endif
+
+
+#define write_uleb128(ptr,val) ({	\
+  uint32_t valv = (val);		\
+  do					\
+    {					\
+      unsigned char c = valv & 0x7f;	\
+      valv >>= 7;			\
+      if (valv)				\
+	c |= 0x80;			\
+      *(ptr)++ = c;			\
+    }					\
+  while (valv);				\
+})
+
 
 extern "C" {
 #include <elfutils/libdwfl.h>
@@ -100,6 +118,9 @@ typedef std::unordered_map<void*, srcfile_lines_cache_t*> cu_lines_cache_t;
 // cu die -> {entry pcs}
 typedef std::unordered_set<Dwarf_Addr> entry_pc_cache_t;
 typedef std::unordered_map<void*, entry_pc_cache_t*> cu_entry_pc_cache_t;
+
+// cache DW_AT_data_bit_offset converted to DW_AT_data_member_location
+typedef std::unordered_map<Dwarf_Word, unsigned char *> dw_at_member_location_cache_t;
 
 typedef std::vector<base_func_info> base_func_info_map_t;
 typedef std::vector<func_info> func_info_map_t;
@@ -554,6 +575,9 @@ private:
   cu_entry_pc_cache_t cu_entry_pc_cache;
   bool check_cu_entry_pc(Dwarf_Die *cu, Dwarf_Addr pc);
 
+  // Cache for all the sythesized DW_AT_data_member_location attributes
+  dw_at_member_location_cache_t dw_at_member_location_cache;
+
   Dwarf_Die* get_parent_scope(Dwarf_Die* die);
 
   /* The global alias cache is used to resolve any DIE found in a
@@ -621,7 +645,7 @@ private:
   void emit_address (Dwarf_Addr address);
 
   int  dwarf_get_enum (Dwarf_Die *scopes, int nscopes,
-                       const char *name, Dwarf_Die *result);
+                       const char *name, Dwarf_Die *result, Dwarf_Die *type);
   void get_locals(std::vector<Dwarf_Die>& scopes, std::set<std::string>& locals);
   void get_locals_die(Dwarf_Die &die, std::set<std::string>& locals);
   void get_members(Dwarf_Die *vardie, std::set<std::string>& members,
@@ -632,6 +656,7 @@ private:
                                                  std::string const & local,
                                                  const target_symbol *e,
                                                  Dwarf_Die *vardie,
+                                                 Dwarf_Die *typedie,
                                                  Dwarf_Attribute *fb_attr_mem,
                                                  Dwarf_Die *funcdie);
 

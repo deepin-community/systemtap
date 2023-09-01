@@ -1,1 +1,2 @@
-systemtap-doc binary: shell-script-fails-syntax-check usr/share/systemtap/examples/stapgames/2048.stp
+systemtap-doc binary: shell-script-fails-syntax-check [usr/share/systemtap/examples/stapgames/2048.stp]
+systemtap-doc binary: wrong-path-for-interpreter /usr/sbin/stap != /usr/bin/stap [usr/share/systemtap/examples/security-band-aids/cve-2011-4127.stp]

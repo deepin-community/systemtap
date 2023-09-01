@@ -21,19 +21,9 @@
 static struct proc_dir_entry *_stp_procfs_module_dir = NULL;
 static struct path _stp_procfs_module_dir_path;
 
-/*
- * Safely creates '/proc/systemtap' (if necessary) and
- * '/proc/systemtap/{module_name}'.
- *
- * NB: this function is suitable to call from early in the the
- * module-init function, and doesn't rely on any other facilities
- * in our runtime.  PR19833.  See also PR15408.
- */
-static int _stp_mkdir_proc_module(void)
-{	
+static bool _stp_proc_dir_exists(void)
+{
 	int found = 0;
-	int rc;
-	static char proc_root_name[STP_MODULE_NAME_LEN + sizeof("systemtap/")];
 #if defined(STAPCONF_PATH_LOOKUP) || defined(STAPCONF_KERN_PATH_PARENT)
 	struct nameidata nd;
 #else  /* STAPCONF_VFS_PATH_LOOKUP or STAPCONF_KERN_PATH */
@@ -41,10 +31,8 @@ static int _stp_mkdir_proc_module(void)
 #if defined(STAPCONF_VFS_PATH_LOOKUP)
 	struct vfsmount *mnt;
 #endif
+	int rc;
 #endif	/* STAPCONF_VFS_PATH_LOOKUP or STAPCONF_KERN_PATH */
-
-        if (_stp_procfs_module_dir != NULL)
-		return 0;
 
 #if defined(STAPCONF_PATH_LOOKUP) || defined(STAPCONF_KERN_PATH_PARENT)
 	/* Why "/proc/systemtap/foo"?  kern_path_parent() is basically
@@ -74,11 +62,6 @@ static int _stp_mkdir_proc_module(void)
 
 #else  /* STAPCONF_VFS_PATH_LOOKUP */
 	/* See if '/proc/systemtap' exists. */
-	if (! init_pid_ns.proc_mnt) {
-		errk("Unable to create '/proc/systemap':"
-		     " '/proc' doesn't exist.\n");
-		goto done;
-	}
 	mnt = init_pid_ns.proc_mnt;
 	rc = vfs_path_lookup(mnt->mnt_root, mnt, "systemtap", 0, &path);
 	if (rc == 0) {
@@ -87,16 +70,73 @@ static int _stp_mkdir_proc_module(void)
 	}
 #endif	/* STAPCONF_VFS_PATH_LOOKUP */
 
-	/* If we couldn't find "/proc/systemtap", create it. */
-	if (!found) {
-		struct proc_dir_entry *de;
+	return found;
+}
 
-		de = proc_mkdir ("systemtap", NULL);
-		if (de == NULL) {
-			errk("Unable to create '/proc/systemap':"
-			     " proc_mkdir failed.\n");
-			goto done;
- 		}
+/*
+ * Safely creates '/proc/systemtap' (if necessary) and
+ * '/proc/systemtap/{module_name}'.
+ *
+ * NB: this function is suitable to call from early in the the
+ * module-init function, and doesn't rely on any other facilities
+ * in our runtime.  PR19833.  See also PR15408.
+ */
+static int _stp_mkdir_proc_module(void)
+{
+	static char proc_root_name[STP_MODULE_NAME_LEN + sizeof("systemtap/")];
+	int rc;
+
+        if (_stp_procfs_module_dir != NULL)
+		return 0;
+
+	/* If we couldn't find "/proc/systemtap", create it. */
+	if (!_stp_proc_dir_exists()) {
+		/*
+		 * We need some sleepable way to synchronize with other stap
+		 * modules which are also being loaded for the first time on
+		 * this system. The `/proc/systemtap` directory is never removed
+		 * after it's made, so this race only happens briefly the first
+		 * time stap is used on the current boot. On 3.19+ kernels, the
+		 * race results in only a WARN and proc_mkdir() failing; nothing
+		 * more than that. However, on kernels <3.19, proc_mkdir()
+		 * doesn't error out when a duplicate directory is made, and
+		 * instead there are leaks in addition to the WARN (see kernel
+		 * commit b208d54b7539 for details). We'd like to fix the leak
+		 * and ideally not scare sysadmins with WARNs, so we abuse
+		 * `module_mutex` in the kernel for mutual exclusion between all
+		 * stap modules. Since `module_mutex` isn't ours to abuse
+		 * freely, we elide it by checking if `/proc/systemtap` exists
+		 * first, and if it doesn't, then we check again after taking
+		 * the lock. This means we'll only use `module_mutex` and
+		 * redundantly check for the existence of `/proc/systemtap` just
+		 * once for each of the first stap modules loaded on the system,
+		 * and only for those stap modules which encounter the race.
+		 * After the race window, we're back to just the single check
+		 * for `/proc/systemtap` and nothing more.
+		 *
+		 * This doesn't work on 5.12+ kernels though, as `module_mutex`
+		 * is no longer exported, but that isn't a big deal. Since
+		 * there's no risk of a leak on 5.12+ kernels, the worst that
+		 * can happen is a cosmetic WARN.
+		 *
+		 * We never need to check proc_mkdir() for an error because, if
+		 * it fails on 5.12+ without `module_mutex` due to the directory
+		 * already existing, then it's guaranteed that the directory
+		 * will be immediately available to use since procfs serializes
+		 * the existence check and the registration under the same hold
+		 * of a global lock. And if there's a proc_mkdir() error even
+		 * with `module_mutex`, then the other proc_mkdir() attempt
+		 * below which *is* checked for errors will fail anyway and
+		 * produce a fatal error message.
+		 */
+#ifdef STAPCONF_MODULE_MUTEX
+		mutex_lock(&module_mutex);
+		if (!_stp_proc_dir_exists())
+			proc_mkdir("systemtap", NULL);
+		mutex_unlock(&module_mutex);
+#else
+		proc_mkdir("systemtap", NULL);
+#endif
 	}
 
 	/* Create the "systemtap/{module_name} directory in procfs. */
@@ -231,10 +271,24 @@ struct file_operations relay_procfs_operations;
 #endif
 
 
+// We need to map procfs concepts of proc_dir_entry* and relayfs/vfs of path/dentry*.
+struct procfs_relay_file
+{
+        struct path p;               // contains the dentry*
+        struct proc_dir_entry *pde;  // entry valid if this pointer non-NULL
+};
+struct procfs_relay_file *p_r_files;
+
+
 static int _stp_procfs_transport_fs_init(const char *module_name)
 {
+  p_r_files = _stp_vzalloc(num_possible_cpus()
+                           * sizeof(struct procfs_relay_file));
+  if (unlikely(p_r_files == NULL))
+    return -ENOMEM;
+
 #ifdef STAPCONF_PROC_OPS
-  relay_procfs_operations.proc_open = relay_file_operations.open;
+  relay_procfs_operations.proc_open = __stp_relay_file_open;
   relay_procfs_operations.proc_poll = __stp_relay_file_poll;
   relay_procfs_operations.proc_mmap = relay_file_operations.mmap;
   relay_procfs_operations.proc_read = __stp_relay_file_read;
@@ -242,20 +296,28 @@ static int _stp_procfs_transport_fs_init(const char *module_name)
   relay_procfs_operations.proc_release = relay_file_operations.release;
 #else
   relay_procfs_operations = relay_file_operations;
+  relay_procfs_operations.open = __stp_relay_file_open;
   relay_procfs_operations.owner = THIS_MODULE;
   relay_procfs_operations.poll = __stp_relay_file_poll;
   relay_procfs_operations.read = __stp_relay_file_read;
 #endif
   
-  if (_stp_mkdir_proc_module()) // get the _stp_procfs_module_dir* created
+  if (_stp_mkdir_proc_module()) { // get the _stp_procfs_module_dir* created
+          _stp_vfree (p_r_files);
+          p_r_files = NULL;
           return -1;
+  }
 
   dbug_trans(1, "transport_fs_init dentry=%08lx pde=%08lx ",
              (unsigned long) _stp_procfs_module_dir_path.dentry,
              (unsigned long) _stp_procfs_module_dir);
   
-  if (_stp_transport_data_fs_init() != 0)
+  if (_stp_transport_data_fs_init() != 0) {
+          _stp_rmdir_proc_module();
+          _stp_vfree (p_r_files);
+          p_r_files = NULL;
           return -1;
+  }
   
   return 0;
 }
@@ -264,19 +326,12 @@ static int _stp_procfs_transport_fs_init(const char *module_name)
 static void _stp_procfs_transport_fs_close(void)
 {
 	_stp_transport_data_fs_close();
+
+	if (likely(p_r_files)) {
+        	_stp_vfree (p_r_files);
+        	p_r_files = NULL;
+        }
 }
-
-
-
-// We need to map procfs concepts of proc_dir_entry* and relayfs/vfs of path/dentry*.
-#define MAX_RELAYFS_FILES NR_CPUS
-struct procfs_relay_file
-{
-        struct path p;               // contains the dentry*
-        struct proc_dir_entry *pde;  // entry valid if this pointer non-NULL
-};
-struct procfs_relay_file p_r_files[MAX_RELAYFS_FILES];
-
 
 
 static struct dentry *_stp_procfs_get_module_dir(void)
@@ -291,14 +346,19 @@ static int __stp_procfs_relay_remove_buf_file_callback(struct dentry *dentry)
   struct proc_dir_entry *pde = NULL;
   
   // find the corresponding pde*
-  for (i=0; i<MAX_RELAYFS_FILES; i++)
+
+  /* NB We cannot use the for_each_online_cpu() here since online
+   * CPUs may get changed on-the-fly through the CPU hotplug feature
+   * of the kernel.
+   */
+  for_each_possible_cpu(i)
     {
       if (p_r_files[i].pde != NULL &&
           p_r_files[i].p.dentry == dentry)
         break;
     }
 
-  if (i != MAX_RELAYFS_FILES)
+  if (i != num_possible_cpus())
     {
       pde = p_r_files[i].pde;
       proc_remove (pde);
@@ -348,12 +408,17 @@ __stp_procfs_relay_create_buf_file_callback(const char *filename,
                 THIS_MODULE->name, filename);
   
   // find spot to plop this
-  for (i=0; i<MAX_RELAYFS_FILES; i++)
+
+  /* NB We cannot use the for_each_online_cpu() here since online
+   * CPUs may get changed on-the-fly through the CPU hotplug feature
+   * of the kernel.
+   */
+  for_each_possible_cpu(i)
     {
       if (p_r_files[i].pde == NULL)
         break;
     }
-  if (i == MAX_RELAYFS_FILES)
+  if (i == num_possible_cpus())
     goto out1;
   
   rc = kern_path (fullpath, 0, &p_r_files[i].p);

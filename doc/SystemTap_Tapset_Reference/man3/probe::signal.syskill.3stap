@@ -2,12 +2,12 @@
 .\"     Title: probe::signal.syskill
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: May 2021
+.\"      Date: November 2022
 .\"    Manual: Signal Tapset
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::SIGNAL\&.SYSK" "3stap" "May 2021" "SystemTap Tapset Reference" "Signal Tapset"
+.TH "PROBE::SIGNAL\&.SYSK" "3stap" "November 2022" "SystemTap Tapset Reference" "Signal Tapset"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -41,14 +41,9 @@ signal\&.syskill
 The name of the signal recipient
 .RE
 .PP
-\fIsig_name\fR
+\fIname\fR
 .RS 4
-A string representation of the signal
-.RE
-.PP
-\fIsig_pid\fR
-.RS 4
-The PID of the process receiving the signal
+Name of the probe point
 .RE
 .PP
 \fItask\fR
@@ -61,9 +56,14 @@ A task handle to the signal recipient
 The specific signal sent to the process
 .RE
 .PP
-\fIname\fR
+\fIsig_name\fR
 .RS 4
-Name of the probe point
+A string representation of the signal
+.RE
+.PP
+\fIsig_pid\fR
+.RS 4
+The PID of the process receiving the signal
 .RE
 .SH SEE ALSO\n 
 .IR tapset::signal (3stap)

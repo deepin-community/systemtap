@@ -57,8 +57,8 @@ static ssize_t _stp_ctl_write_cmd(struct file *file, const char __user *buf, siz
 
 #if defined(DEBUG_TRANS) && (DEBUG_TRANS >= 2)
 	if (type < STP_MAX_CMD)
-		dbug_trans2("Got %s. len=%d\n", _stp_command_name[type],
-			    (int)count);
+		dbug_trans2("Got %s. euid=%ld, len=%d\n", _stp_command_name[type],
+			    (long)euid, (int)count);
 #endif
 
         // PR17232: preclude reentrancy during handling of messages.
@@ -413,7 +413,7 @@ static void _stp_ctl_free_special_buffers(void)
 
 /* Get a buffer based on type, possibly a generic buffer, when all else
    fails returns NULL and there is nothing we can do.  */
-static struct _stp_buffer *_stp_ctl_get_buffer(int type, void *data,
+static struct _stp_buffer *_stp_ctl_get_buffer(int type, const char *data,
 					       unsigned len)
 {
 	unsigned long flags;
@@ -590,6 +590,55 @@ static int _stp_ctl_send(int type, void *data, unsigned len)
 	return len + sizeof(bptr->type);
 }
 
+/* Logs a warning or error through the control channel. This function mimics
+   _stp_ctl_send() but directly uses an _stp_buffer to construct the warning or
+   error message. This is *only* for warnings and errors. The logtype string
+   should be either "WARNING: " or "ERROR: ", and logtype_len shouldn't include
+   a trailing NUL termination byte. The message type is always assumed to be
+   STP_OOB_DATA since this is only for warnings and errors. */
+static void _stp_ctl_log_werr(const char *logtype, size_t logtype_len,
+			      const char *fmt, va_list args)
+{
+	struct context *__restrict__ c;
+	struct _stp_buffer *bptr;
+	unsigned long flags;
+
+	c = _stp_runtime_entryfn_get_context();
+	bptr = _stp_ctl_get_buffer(STP_OOB_DATA, logtype, logtype_len);
+	if (!bptr)
+		goto put_context;
+
+	/*
+	 * This is a generic failure message for when there's no space left. We
+	 * aren't allowed to change it, so just go straight to sending it off.
+	 */
+	if (bptr == _stp_ctl_oob_warn || bptr == _stp_ctl_oob_err)
+		goto send_msg;
+
+	/*
+	 * The logtype string was already copied in by _stp_ctl_get_buffer(),
+	 * now copy the rest of the message. The trailing NUL termination byte
+	 * automatically added by vscnprintf() is unneeded, so it's ignored.
+	 */
+	bptr->len += vscnprintf(bptr->buf + logtype_len,
+				STP_CTL_BUFFER_SIZE - logtype_len, fmt, args);
+
+	/*
+	 * Make sure the last character is a newline. There will always be
+	 * enough space to do this because vscnprintf() reserves a byte for the
+	 * trailing NUL character which we don't care about.
+	 */
+	if (bptr->buf[bptr->len - 1] != '\n')
+		bptr->buf[bptr->len++] = '\n';
+
+send_msg:
+	stp_spin_lock_irqsave(&_stp_ctl_ready_lock, flags);
+	list_add_tail(&bptr->list, &_stp_ctl_ready_q);
+	stp_spin_unlock_irqrestore(&_stp_ctl_ready_lock, flags);
+put_context:
+	_stp_runtime_entryfn_put_context(c);
+}
+
 /* Calls _stp_ctl_send and then calls wake_up on _stp_ctl_wq
    to immediately notify listeners. DO NOT CALL THIS FROM A (KERNEL)
    PROBE CONTEXT. This is only safe to call from the transport layer
@@ -667,10 +716,42 @@ static ssize_t _stp_ctl_read_cmd(struct file *file, char __user *buf,
 
 static int _stp_ctl_open_cmd(struct inode *inode, struct file *file)
 {
+	static struct file_operations _stp_ctl_fops;
+
 	if (atomic_inc_return (&_stp_ctl_attached) > 1) {
                 atomic_dec (&_stp_ctl_attached);
 		return -EBUSY;
         }
+
+	/*
+	 * Replace the file's f_op with our own which has the module owner set.
+	 * This is needed because, in do_select(), the only thing that can stop
+	 * this module from disappearing while data from our procfs file is in
+	 * use is the module reference counter. So we need to set the module
+	 * owner pointer and then add a reference to our module, since the
+	 * reference addition from the open() has already been skipped by the
+	 * time this code is reached. The data which can be used after the
+	 * module is freed is `&_stp_ctl_wq`, which is stored and later
+	 * dereferenced in do_select(). This pointer is passed to do_select()
+	 * from the poll_wait() in _stp_ctl_poll_cmd(), which stores it in
+	 * `entry->wait_address`. The reason this use-after-free problem exists
+	 * is because procfs doesn't allow for passing in a module owner: all
+	 * procfs files use an internal `struct file_operations` located in
+	 * fs/proc/inode.c. So we patch in a module owner the hard way. No
+	 * locking is needed here due to the `_stp_ctl_attached` guard above.
+	 * Note that `_stp_ctl_fops` can only be initialized once; initializing
+	 * it more than once could cause a bad race because _stp_ctl_close_cmd()
+	 * is called *before* the final `file->f_op` usage, meaning that the
+	 * `_stp_ctl_attached` guard won't stop us from mangling `_stp_ctl_fops`
+	 * while it's in use for closing an old control channel fd.
+	 */
+	if (_stp_ctl_fops.owner != THIS_MODULE) {
+		_stp_ctl_fops = *file->f_op;
+		_stp_ctl_fops.owner = THIS_MODULE;
+	}
+	__module_get(THIS_MODULE);
+	file->f_op = &_stp_ctl_fops;
+
 	_stp_attach();
 	return 0;
 }

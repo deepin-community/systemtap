@@ -58,6 +58,7 @@ struct uprobe_derived_probe_group;
 struct utrace_derived_probe_group;
 struct itrace_derived_probe_group;
 struct task_finder_derived_probe_group;
+struct vma_tracker_derived_probe_group;
 struct timer_derived_probe_group;
 struct netfilter_derived_probe_group;
 struct profile_derived_probe_group;
@@ -158,7 +159,10 @@ public:
   void version ();
   void usage (int exitcode);
   void check_options (int argc, char * const argv []);
-  static const char* morehelp;
+  // Mark morehelp as used, otherwise LTO might optimize
+  // this one out, and testcases such as at_var_mark.exp
+  // would miss it.
+  static const char* morehelp __attribute__ ((used));
 
   // NB: It is very important for all of the above (and below) fields
   // to be cleared in the systemtap_session ctor (session.cxx).
@@ -292,6 +296,9 @@ public:
   bool modules_must_be_signed();
   void get_mok_info();
 
+  bool module_sign_given;
+  std::string module_sign_mok_path;
+
   // NB: It is very important for all of the above (and below) fields
   // to be cleared in the systemtap_session ctor (session.cxx).
 
@@ -394,6 +401,7 @@ public:
   utrace_derived_probe_group* utrace_derived_probes;
   itrace_derived_probe_group* itrace_derived_probes;
   task_finder_derived_probe_group* task_finder_derived_probes;
+  vma_tracker_derived_probe_group* vma_tracker_derived_probes;
   timer_derived_probe_group* timer_derived_probes;
   netfilter_derived_probe_group* netfilter_derived_probes;
   profile_derived_probe_group* profile_derived_probes;

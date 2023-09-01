@@ -45,6 +45,7 @@ usage (int rc)
   cout << "Usage: " << program_invocation_short_name
        << " MODULE [-v] [-c CMD | -x PID] [-o FILE] [-C WHEN] [globalname=value ...] [-V] [-h]" << endl
        << "-v              Increase verbosity." << endl
+       << "-w              Suppress warnings from the script." << endl
        << "-c cmd          Command \'cmd\' will be run and " << program_invocation_short_name << " will" << endl
        << "                exit when it does.  The '_stp_target' variable" << endl
        << "                will contain the pid for the command." << endl
@@ -100,7 +101,7 @@ main(int argc, char * const argv[])
 
         case 'V':
           printf("Systemtap Dyninst loader/runner (version %s/%s, %s)\n"
-                 "Copyright (C) 2012-2021 Red Hat, Inc. and others\n"  // PRERELEASE
+                 "Copyright (C) 2012-2022 Red Hat, Inc. and others\n"  // PRERELEASE
                  "This is free software; see the source for copying conditions.\n",
                  VERSION, DYNINST_FULL_VERSION, STAP_EXTENDED_VERSION);
           return 0;

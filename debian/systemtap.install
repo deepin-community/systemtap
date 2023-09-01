@@ -6,3 +6,5 @@ usr/bin/stapbpf
 usr/share/man/man8/stapbpf.8
 usr/bin/stap-report
 usr/share/man/man1/stap-report.1
+usr/bin/stap-profile-annotate
+usr/share/man/man1/stap-profile-annotate.1

@@ -2,12 +2,12 @@
 .\"     Title: probe::tcp.receive
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: May 2021
+.\"      Date: November 2022
 .\"    Manual: Networking Tapset
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::TCP\&.RECEIVE" "3stap" "May 2021" "SystemTap Tapset Reference" "Networking Tapset"
+.TH "PROBE::TCP\&.RECEIVE" "3stap" "November 2022" "SystemTap Tapset Reference" "Networking Tapset"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -41,29 +41,19 @@ tcp\&.receive
 TCP URG flag
 .RE
 .PP
-\fIname\fR
+\fIsaddr\fR
 .RS 4
-Name of the probe point
-.RE
-.PP
-\fIack\fR
-.RS 4
-TCP ACK flag
-.RE
-.PP
-\fIsport\fR
-.RS 4
-TCP source port
-.RE
-.PP
-\fIprotocol\fR
-.RS 4
-Packet protocol from driver
+A string representing the source IP address
 .RE
 .PP
 \fIpsh\fR
 .RS 4
 TCP PSH flag
+.RE
+.PP
+\fIprotocol\fR
+.RS 4
+Packet protocol from driver
 .RE
 .PP
 \fIdport\fR
@@ -76,9 +66,14 @@ TCP destination port
 TCP RST flag
 .RE
 .PP
-\fIdaddr\fR
+\fIiphdr\fR
 .RS 4
-A string representing the destination IP address
+IP header address
+.RE
+.PP
+\fIfamily\fR
+.RS 4
+IP address family
 .RE
 .PP
 \fIsyn\fR
@@ -86,24 +81,29 @@ A string representing the destination IP address
 TCP SYN flag
 .RE
 .PP
+\fIname\fR
+.RS 4
+Name of the probe point
+.RE
+.PP
 \fIfin\fR
 .RS 4
 TCP FIN flag
 .RE
 .PP
-\fIiphdr\fR
+\fIsport\fR
 .RS 4
-IP header address
+TCP source port
 .RE
 .PP
-\fIsaddr\fR
+\fIack\fR
 .RS 4
-A string representing the source IP address
+TCP ACK flag
 .RE
 .PP
-\fIfamily\fR
+\fIdaddr\fR
 .RS 4
-IP address family
+A string representing the destination IP address
 .RE
 .SH SEE ALSO\n 
 .IR tapset::tcp (3stap)

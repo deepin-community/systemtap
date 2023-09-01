@@ -1,0 +1,17 @@
+#!/bin/bash
+
+set -e
+
+cd $AUTOPKGTEST_TMP
+
+echo 'provider sdt_probes { probe test_0 (int type); }' > test.d
+
+dtrace -C -G -s test.d -o test.o
+readelf --wide --symbols test.o > sym1.txt
+
+for i in `seq 1 10`; do
+    dtrace -C -G -s test.d -o test.o
+    readelf --wide --symbols test.o > sym2.txt
+
+    cmp sym1.txt sym2.txt
+done

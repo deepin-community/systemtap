@@ -1,5 +1,5 @@
 // bpf translation pass
-// Copyright (C) 2016-2020 Red Hat Inc.
+// Copyright (C) 2016-2022 Red Hat Inc.
 //
 // This file is part of systemtap, and is free software.  You can
 // redistribute it and/or modify it under the terms of the GNU General
@@ -135,7 +135,206 @@ is_commutative(opcode code)
     }
 }
 
-/* Various functions for eBPF helper lookup: */
+/* PR29307: BPF opcode lookup for the embedded-code assembler: */
+
+std::map<opcode, const char *> bpf_opcode_name_map;
+std::map<std::string, opcode> bpf_src_opcode_map; // when operation takes SRC
+std::map<std::string, opcode> bpf_imm_opcode_map; // when operation takes IMM
+std::map<opcode, unsigned> bpf_opcode_category_map;
+
+// XXX: Follows https://github.com/iovisor/bpf-docs/blob/master/eBPF.md rather than
+// kernel linux/bpf_exp.y to avoid getting into weird addressing-mode syntax.
+// Perhaps later, expanding the above bpf_{src,imm}_opcode_map scheme.
+//
+// Define as FN_{SRC,IMM}(op_name, raw_opcode, opcode, category)
+// (raw_opcode is the hex opcode taken from the iovisor cheatsheet,
+//  opcode is the opcode as constructed from linux bpf.h/bpf_common.h macros
+//  following the scheme in linux/filter.h (yet another assembler format!)
+//  These codes should be equal, both are included to sanity-check the table.)
+// with FN_IMM used only for variants of SRC opcodes that take an IMM value.
+//
+// XXX: Does not have to be complete, just complete enough for the needs of the tapsets.
+// Will gradually add opcodes over the following patches.
+#ifndef __BPF_OPCODE_MAPPER
+#define __BPF_OPCODE_MAPPER(FN_SRC,FN_IMM) \
+  FN_SRC(add, 0x0f, BPF_ALU64 | BPF_OP(BPF_ADD) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(add, 0x07, BPF_ALU64 | BPF_OP(BPF_ADD) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(sub, 0x1f, BPF_ALU64 | BPF_OP(BPF_SUB) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(sub, 0x17, BPF_ALU64 | BPF_OP(BPF_SUB) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(mul, 0x2f, BPF_ALU64 | BPF_OP(BPF_MUL) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(mul, 0x27, BPF_ALU64 | BPF_OP(BPF_MUL) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(div, 0x3f, BPF_ALU64 | BPF_OP(BPF_DIV) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(div, 0x37, BPF_ALU64 | BPF_OP(BPF_DIV) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(or, 0x4f, BPF_ALU64 | BPF_OP(BPF_OR) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(or, 0x47, BPF_ALU64 | BPF_OP(BPF_OR) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(and, 0x5f, BPF_ALU64 | BPF_OP(BPF_AND) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(and, 0x57, BPF_ALU64 | BPF_OP(BPF_AND) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(lsh, 0x6f, BPF_ALU64 | BPF_OP(BPF_LSH) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(lsh, 0x67, BPF_ALU64 | BPF_OP(BPF_LSH) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(rsh, 0x7f, BPF_ALU64 | BPF_OP(BPF_RSH) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(rsh, 0x77, BPF_ALU64 | BPF_OP(BPF_RSH) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(neg, 0x87, BPF_ALU64 | BPF_OP(BPF_NEG) | BPF_K, BPF_ALU_ARI2), \
+  FN_SRC(mod, 0x9f, BPF_ALU64 | BPF_OP(BPF_MOD) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(mod, 0x97, BPF_ALU64 | BPF_OP(BPF_MOD) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(xor, 0xaf, BPF_ALU64 | BPF_OP(BPF_XOR) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(xor, 0xa7, BPF_ALU64 | BPF_OP(BPF_XOR) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(mov, 0xbf, BPF_ALU64 | BPF_MOV | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(mov, 0xb7, BPF_ALU64 | BPF_MOV | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(arsh, 0xcf, BPF_ALU64 | BPF_OP(BPF_ARSH) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(arsh, 0xc7, BPF_ALU64 | BPF_OP(BPF_ARSH) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(add32, 0x0c, BPF_ALU | BPF_OP(BPF_ADD) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(add32, 0x04, BPF_ALU | BPF_OP(BPF_ADD) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(sub32, 0x1c, BPF_ALU | BPF_OP(BPF_SUB) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(sub32, 0x14, BPF_ALU | BPF_OP(BPF_SUB) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(mul32, 0x2c, BPF_ALU | BPF_OP(BPF_MUL) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(mul32, 0x24, BPF_ALU | BPF_OP(BPF_MUL) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(div32, 0x3c, BPF_ALU | BPF_OP(BPF_DIV) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(div32, 0x34, BPF_ALU | BPF_OP(BPF_DIV) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(or32, 0x4c, BPF_ALU | BPF_OP(BPF_OR) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(or32, 0x44, BPF_ALU | BPF_OP(BPF_OR) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(and32, 0x5c, BPF_ALU | BPF_OP(BPF_AND) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(and32, 0x54, BPF_ALU | BPF_OP(BPF_AND) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(lsh32, 0x6c, BPF_ALU | BPF_OP(BPF_LSH) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(lsh32, 0x64, BPF_ALU | BPF_OP(BPF_LSH) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(rsh32, 0x7c, BPF_ALU | BPF_OP(BPF_RSH) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(rsh32, 0x74, BPF_ALU | BPF_OP(BPF_RSH) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(neg32, 0x84, BPF_ALU | BPF_OP(BPF_NEG) | BPF_K, BPF_ALU_ARI2), \
+  FN_SRC(mod32, 0x9c, BPF_ALU | BPF_OP(BPF_MOD) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(mod32, 0x94, BPF_ALU | BPF_OP(BPF_MOD) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(xor32, 0xac, BPF_ALU | BPF_OP(BPF_XOR) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(xor32, 0xa4, BPF_ALU | BPF_OP(BPF_XOR) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(mov32, 0xbc, BPF_ALU | BPF_MOV | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(mov32, 0xb4, BPF_ALU | BPF_MOV | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(arsh32, 0xcc, BPF_ALU | BPF_OP(BPF_ARSH) | BPF_X, BPF_ALU_ARI3), \
+  FN_IMM(arsh32, 0xc4, BPF_ALU | BPF_OP(BPF_ARSH) | BPF_K, BPF_ALU_ARI3), \
+  FN_SRC(lddw, 0x18, BPF_LD | BPF_DW | BPF_IMM, BPF_MEMORY_ARI3), \
+  FN_SRC(ldxw, 0x61, BPF_LDX | BPF_SIZE(BPF_W) | BPF_MEM, BPF_MEMORY_ARI34_SRCOFF), \
+  FN_SRC(ldxh, 0x69, BPF_LDX | BPF_SIZE(BPF_H) | BPF_MEM, BPF_MEMORY_ARI34_SRCOFF), \
+  FN_SRC(ldxb, 0x71, BPF_LDX | BPF_SIZE(BPF_B) | BPF_MEM, BPF_MEMORY_ARI34_SRCOFF), \
+  FN_SRC(ldxdw, 0x79, BPF_LDX | BPF_SIZE(BPF_DW) | BPF_MEM, BPF_MEMORY_ARI34_SRCOFF), \
+  FN_SRC(stw, 0x62, BPF_ST | BPF_SIZE(BPF_W) | BPF_MEM, BPF_MEMORY_ARI34_DSTOFF_IMM), \
+  FN_SRC(sth, 0x6a, BPF_ST | BPF_SIZE(BPF_H) | BPF_MEM, BPF_MEMORY_ARI34_DSTOFF_IMM), \
+  FN_SRC(stb, 0x72, BPF_ST | BPF_SIZE(BPF_B) | BPF_MEM, BPF_MEMORY_ARI34_DSTOFF_IMM), \
+  FN_SRC(stdw, 0x7a, BPF_ST | BPF_SIZE(BPF_DW) | BPF_MEM, BPF_MEMORY_ARI34_DSTOFF_IMM), \
+  FN_SRC(stxw, 0x63, BPF_STX | BPF_SIZE(BPF_W) | BPF_MEM, BPF_MEMORY_ARI34_DSTOFF), \
+  FN_SRC(stxh, 0x6b, BPF_STX | BPF_SIZE(BPF_H) | BPF_MEM, BPF_MEMORY_ARI34_DSTOFF), \
+  FN_SRC(stxb, 0x73, BPF_STX | BPF_SIZE(BPF_B) | BPF_MEM, BPF_MEMORY_ARI34_DSTOFF), \
+  FN_SRC(stxdw, 0x7b, BPF_STX | BPF_SIZE(BPF_DW) | BPF_MEM, BPF_MEMORY_ARI34_DSTOFF), \
+  FN_SRC(ja, 0x05, BPF_JMP | BPF_JA, BPF_BRANCH_ARI2), \
+  FN_SRC(jeq, 0x1d, BPF_JMP | BPF_OP(BPF_JEQ) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jeq, 0x15, BPF_JMP | BPF_OP(BPF_JEQ) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jgt, 0x2d, BPF_JMP | BPF_OP(BPF_JGT) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jgt, 0x25, BPF_JMP | BPF_OP(BPF_JGT) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jge, 0x3d, BPF_JMP | BPF_OP(BPF_JGE) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jge, 0x35, BPF_JMP | BPF_OP(BPF_JGE) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jlt, 0xad, BPF_JMP | BPF_OP(BPF_JLT) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jlt, 0xa5, BPF_JMP | BPF_OP(BPF_JLT) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jle, 0xbd, BPF_JMP | BPF_OP(BPF_JLE) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jle, 0xb5, BPF_JMP | BPF_OP(BPF_JLE) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jset, 0x4d, BPF_JMP | BPF_OP(BPF_JSET) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jset, 0x45, BPF_JMP | BPF_OP(BPF_JSET) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jne, 0x5d, BPF_JMP | BPF_OP(BPF_JNE) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jne, 0x55, BPF_JMP | BPF_OP(BPF_JNE) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jsgt, 0x6d, BPF_JMP | BPF_OP(BPF_JSGT) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jsgt, 0x65, BPF_JMP | BPF_OP(BPF_JSGT) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jsge, 0x7d, BPF_JMP | BPF_OP(BPF_JSGE) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jsge, 0x75, BPF_JMP | BPF_OP(BPF_JSGE) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jslt, 0xcd, BPF_JMP | BPF_OP(BPF_JSLT) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jslt, 0xc5, BPF_JMP | BPF_OP(BPF_JSLT) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(jsle, 0xdd, BPF_JMP | BPF_OP(BPF_JSLE) | BPF_X, BPF_BRANCH_ARI4), \
+  FN_IMM(jsle, 0xd5, BPF_JMP | BPF_OP(BPF_JSLE) | BPF_K, BPF_BRANCH_ARI4), \
+  FN_SRC(call, 0x85, BPF_JMP | BPF_CALL, BPF_CALL_ARI2), \
+  FN_SRC(exit, 0x95, BPF_JMP | BPF_EXIT, BPF_EXIT_ARI1), \
+
+#endif
+// XXX The 2x3 byteswap insns are not too useful.
+//     They need special handling since the opcode name determines imm value.
+// XXX The 8 ldabs* / ldind* opcodes are specific to network processing.
+
+void
+init_bpf_opcode_tables()
+{
+#define __BPF_SET_OPCODE_NAME(name, x, _x, _cat) bpf_opcode_name_map[(x)] = #name
+#define __BPF_SET_OPCODE_SRC(name, x, _x, _cat) bpf_src_opcode_map[#name] = (x)
+#define __BPF_SET_OPCODE_IMM(name, x, _x, _cat) bpf_imm_opcode_map[#name] = (x)
+#define __BPF_SET_OPCODE_CATEGORY(name, x, _x, cat) bpf_opcode_category_map[(x)] = (cat)
+#define __BPF_CHECK_OPCODE(name, x, y, _cat) assert((x)==(y))
+  __BPF_OPCODE_MAPPER(__BPF_SET_OPCODE_NAME,__BPF_SET_OPCODE_NAME)
+  __BPF_OPCODE_MAPPER(__BPF_SET_OPCODE_SRC,__BPF_SET_OPCODE_IMM)
+  __BPF_OPCODE_MAPPER(__BPF_SET_OPCODE_CATEGORY,__BPF_SET_OPCODE_CATEGORY)
+  __BPF_OPCODE_MAPPER(__BPF_CHECK_OPCODE,__BPF_CHECK_OPCODE)
+  (void)0;
+}
+
+/* Convert opcode code to name. */
+const char *
+bpf_opcode_name(opcode code)
+{
+  auto it = bpf_opcode_name_map.find(code);
+  if (it == bpf_opcode_name_map.end())
+    return "unknown";
+  return it->second;
+}
+
+/* Convert opcode name to code. In ambiguous cases
+   e.g. add (0x07 vs 0x0f), prefer the variant that takes a
+   register. */
+opcode
+bpf_opcode_id(const std::string &name)
+{
+  auto it = bpf_src_opcode_map.find(name);
+  if (it == bpf_src_opcode_map.end())
+    return 0;
+  return it->second;
+}
+
+/* If op is an ALU/branch opcode taking src,
+   return the equivalent opcode taking imm. */
+opcode
+bpf_opcode_variant_imm(opcode code)
+{
+  if (BPF_CLASS(code) == BPF_ALU64
+      || BPF_CLASS(code) == BPF_ALU
+      || BPF_CLASS(code) == BPF_JMP)
+      return (code & ~BPF_X);
+  return code;
+}
+
+unsigned
+bpf_opcode_category(opcode code)
+{
+  auto it = bpf_opcode_category_map.find(code);
+  if (it == bpf_opcode_category_map.end())
+    return BPF_UNKNOWN_ARI;
+  return it->second;
+}
+
+const char *
+bpf_expected_args (unsigned cat)
+{
+  switch (cat) {
+  case BPF_MEMORY_ARI4:
+  case BPF_BRANCH_ARI4:
+    return "3-4";
+  case BPF_MEMORY_ARI34_SRCOFF:
+  case BPF_MEMORY_ARI34_DSTOFF:
+    return "2-4";
+  case BPF_ALU_ARI3:
+  case BPF_MEMORY_ARI3:
+    return "2/4";
+  case BPF_ALU_ARI2:
+  case BPF_BRANCH_ARI2:
+  case BPF_CALL_ARI2:
+    return "1/4";
+  case BPF_EXIT_ARI1:
+    return "0/4";
+  case BPF_UNKNOWN_ARI:
+  default:
+    return "4";
+  }
+}
+
+/* BPF helper lookup for the translator: */
 
 std::map<unsigned, const char *> bpf_func_name_map;
 std::map<std::string, bpf_func_id> bpf_func_id_map;

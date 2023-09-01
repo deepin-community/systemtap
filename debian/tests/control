@@ -1,3 +1,6 @@
+Tests: dtrace-reproducible
+Depends: systemtap-sdt-dev, binutils, diffutils, cpp, gcc
+
 Tests: stap-prep
 Depends: systemtap, apt-utils
 Restrictions: needs-root isolation-machine

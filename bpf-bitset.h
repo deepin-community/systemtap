@@ -115,6 +115,7 @@ public:
   static const size_t npos = -1;
 
   set1_const_ref(word_t *d, size_t w) : data(d), words(w) { }
+  set1_const_ref(const set1_const_ref &o) : data(o.data), words(o.words) { }
 
   bool operator!= (const set1_const_ref &o) const
   {
@@ -149,6 +150,7 @@ private:
 
 public:
   set1_ref(size_t *d, size_t w) : set1_const_ref(d, w) { }
+  set1_ref(const set1_ref &o) : set1_const_ref(o.data, o.words) { }
 
   bit_ref operator[] (size_t i)
   {
@@ -238,6 +240,7 @@ public:
     if (n1 != o.n1 || w2 != o.w2)
       throw_out_of_range("bpf::bitset::set2::operator=");
     memcpy(data, o.data, n1 * w2 * sizeof(word_t));
+    return *this;
   }
 
   set1_ref operator[] (size_t i)

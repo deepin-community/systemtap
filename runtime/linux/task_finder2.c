@@ -15,6 +15,13 @@
 #include "task_finder_map.c"
 #include "task_finder_vma.c"
 
+#ifndef VMA_ITERATOR
+#define VMA_ITERATOR(name, mm, addr) \
+	struct mm_struct *name = mm
+#define for_each_vma(vmi, vma) \
+	for (vma = vmi->mmap; vma; vma = vma->vm_next)
+#endif
+
 static LIST_HEAD(__stp_task_finder_list);
 
 struct stap_task_finder_target;
@@ -359,7 +366,7 @@ stap_register_task_finder_target(struct stap_task_finder_target *new_tgt)
 	// target to the task list.
 	if (! found_node) {
 		INIT_LIST_HEAD(&new_tgt->callback_list_head);
-		list_add(&new_tgt->list, &__stp_task_finder_list);
+		list_add_tail(&new_tgt->list, &__stp_task_finder_list);
 		tgt = new_tgt;
 	}
 
@@ -455,51 +462,6 @@ stap_utrace_detach(struct task_struct *tsk,
 		utrace_engine_put(engine);
 	}
 	return rc;
-}
-
-static void
-stap_utrace_detach_ops(struct utrace_engine_ops *ops)
-{
-	struct task_struct *grp, *tsk;
-	struct utrace_engine *engine;
-	pid_t pid = 0;
-	int rc = 0;
-
-	// Notice we're not calling get_task_mm() in this loop. In
-	// every other instance when calling do_each_thread, we avoid
-	// tasks with no mm, because those are kernel threads.  So,
-	// why is this function different?  When a thread is in the
-	// process of dying, its mm gets freed.  Then, later the
-	// thread gets in the dying state and the thread's
-	// UTRACE_EVENT(DEATH) event handler gets called (if any).
-	//
-	// If a thread is in this "mortally wounded" state - no mm
-	// but not dead - and at that moment this function is called,
-	// we'd miss detaching from it if we were checking to see if
-	// it had an mm.
-
-	rcu_read_lock();
-	do_each_thread(grp, tsk) {
-#ifdef PF_KTHREAD
-		// Ignore kernel threads.  On systems without
-		// PF_KTHREAD, we're ok, since kernel threads won't be
-		// matched by the stap_utrace_detach() call.
-		if (tsk->flags & PF_KTHREAD)
-			continue;
-#endif
-
-		/* Notice we're purposefully ignoring errors from
-		 * stap_utrace_detach().  Even if we got an error on
-		 * this task, we need to keep detaching from other
-		 * tasks.  But warn, we might be unloading and dangling
-		 * engines are bad news. */
-		rc = stap_utrace_detach(tsk, ops);
-		if (rc != 0)
-			_stp_error("stap_utrace_detach returned error %d on pid %d", rc, tsk->pid);
-		WARN_ON(rc != 0);
-	} while_each_thread(grp, tsk);
-	rcu_read_unlock();
-	debug_task_finder_report();
 }
 
 static char *
@@ -1109,6 +1071,7 @@ __stp_utrace_task_finder_report_clone(u32 action,
 	work = __stp_tf_alloc_task_work((void *)(engine->ops));
 	if (work == NULL) {
 		_stp_error("Unable to allocate space for task_work");
+		__stp_tf_handler_end();
 		return UTRACE_RESUME;
 	}
 	__stp_tf_init_task_work(work, &__stp_tf_clone_worker);
@@ -1285,12 +1248,14 @@ __stp_call_mmap_callbacks_for_task(struct stap_task_finder_target *tgt,
 		return;
 	}
 
-	// First find the number of file-based vmas.
-	vma = mm->mmap;
-	while (vma) {
-		if (vma->vm_file)
-			file_based_vmas++;
-		vma = vma->vm_next;
+	{
+		// Need surrounding {} because of VMA_ITERATOR variable
+		// First find the number of file-based vmas.
+		VMA_ITERATOR(vmi, mm, 0);
+		for_each_vma(vmi, vma) {
+			if (vma->vm_file)
+				file_based_vmas++;
+		}
 	}
 
 	// Now allocate an array to cache vma information in.
@@ -1299,9 +1264,9 @@ __stp_call_mmap_callbacks_for_task(struct stap_task_finder_target *tgt,
 					 * file_based_vmas);
 	if (vma_cache != NULL) {
 		// Loop through the vmas again, and cache needed information.
-		vma = mm->mmap;
+		VMA_ITERATOR(vmi, mm, 0);
 		vma_cache_p = vma_cache;
-		while (vma) {
+		for_each_vma(vmi,vma) {
 			if (vma->vm_file) {
 #ifdef STAPCONF_DPATH_PATH
 			    // Notice we're increasing the reference
@@ -1327,7 +1292,6 @@ __stp_call_mmap_callbacks_for_task(struct stap_task_finder_target *tgt,
 			    vma_cache_p->vm_flags = vma->vm_flags;
 			    vma_cache_p++;
 			}
-			vma = vma->vm_next;
 		}
 	}
 
@@ -1492,6 +1456,7 @@ __stp_utrace_task_finder_target_quiesce(u32 action,
 	 */
 	work = __stp_tf_alloc_task_work(tgt);
 	if (work == NULL) {
+		__stp_tf_handler_end();
 		_stp_error("Unable to allocate space for task_work");
 		return UTRACE_RESUME;
 	}
@@ -1718,6 +1683,9 @@ static struct utrace_engine_ops __stp_utrace_task_finder_ops = {
 	.report_death = stap_utrace_task_finder_report_death,
 };
 
+static void
+stap_stop_task_finder(void);
+
 static int
 stap_start_task_finder(void)
 {
@@ -1732,19 +1700,17 @@ stap_start_task_finder(void)
 		return EBUSY;
 	}
 
-	rc = utrace_init();
-        if (rc != 0) { /* PR14781, handle utrace alloc failure. */
-                /* Decrement this back down to UNITIALIZED, to keep
-                   a stap_stop_task_finder() from trying to clean up. */
-		atomic_dec(&__stp_task_finder_state);
-		_stp_error("Failed to initialize utrace hooks");
-                return ENOMEM; /* XXX: or some other one. */
-        }
-
 	mmpath_buf = _stp_kmalloc(PATH_MAX);
 	if (mmpath_buf == NULL) {
 		_stp_error("Unable to allocate space for path");
 		return ENOMEM;
+	}
+
+	rc = utrace_init();
+	if (rc) { /* PR14781, handle utrace alloc failure. */
+		_stp_kfree(mmpath_buf);
+		_stp_error("Failed to initialize utrace hooks");
+		return ENOMEM; /* XXX: or some other one. */
 	}
 
         __stp_tf_map_initialize();
@@ -1877,6 +1843,12 @@ stf_err:
 	rcu_read_unlock();
 	_stp_kfree(mmpath_buf);
 	debug_task_finder_report(); // report at end for utrace engine counting
+	/*
+	 * We need to do our own cleanup if something failed. A full task finder
+	 * stop is needed because utrace is guaranteed to be live by this point.
+	 */
+	if (rc)
+		stap_stop_task_finder();
 	return rc;
 }
 

@@ -29,6 +29,7 @@
 #include <functional> 
 #include <cctype>
 #include <locale>
+#include <memory>
 
 extern "C" {
 #include <elf.h>
@@ -44,6 +45,7 @@ extern "C" {
 #include <unistd.h>
 #include <regex.h>
 #include <stdarg.h>
+#include <libgen.h>
 
 #ifdef HAVE_LIBDEBUGINFOD
 #include <elfutils/debuginfod.h>
@@ -247,6 +249,20 @@ remove_file_or_dir (const char *name)
     return 1;
 
   return 0;
+}
+
+
+void 
+split_path (string &path, string &directory, string &entry)
+{
+  char *dirc, *basec, *bname, *dname;
+
+  dirc = strdupa (path.c_str());
+  basec = strdupa (path.c_str());
+  dname = dirname (dirc);
+  bname = basename (basec);
+  directory = dname;
+  entry = bname;
 }
 
 
@@ -1383,6 +1399,7 @@ normalize_machine(const string& machine)
   else if (machine == "sa110") return "arm";
   else if (machine == "s390x") return "s390";
   else if (machine == "aarch64") return "arm64";
+  else if (machine == "riscv64") return "riscv";
   else if (machine.substr(0,3) == "ppc") return "powerpc";
   else if (machine.substr(0,4) == "mips") return "mips";
   else if (machine.substr(0,3) == "sh2") return "sh";
@@ -1542,7 +1559,7 @@ levenshtein_suggest(const string& target,        // string to match against
 
       // Approximate levenshtein by size-difference only; real score
       // is at least this high
-      unsigned min_score = labs(target.size() - it->size());
+      unsigned min_score = abs(static_cast<signed>(target.size()) - static_cast<signed>(it->size()));
 
       if (min_score > threshold) // min-score too high for threshold
         continue;
@@ -1755,21 +1772,24 @@ flush_to_stream (const string &fname, ostream &o)
   return 1; // Failure
 }
 
+int
+not_isspace(unsigned char c)
+{
+  return !std::isspace(c);
+}
+
 // trim from start (in place)
 void
 ltrim(std::string &s)
 {
-  s.erase(s.begin(),
-	  std::find_if(s.begin(), s.end(),
-		       std::not1(std::ptr_fun<int, int>(std::isspace))));
+  s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_isspace));
 }
 
 // trim from end (in place)
 void
 rtrim(std::string &s)
 {
-  s.erase(std::find_if(s.rbegin(), s.rend(),
-	  std::not1(std::ptr_fun<int, int>(std::isspace))).base(), s.end());
+  s.erase(std::find_if(s.rbegin(), s.rend(), not_isspace).base(), s.end());
 }
 
 // trim from both ends (in place)

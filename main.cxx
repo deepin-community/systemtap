@@ -21,6 +21,7 @@
 #include "coveragedb.h"
 #include "rpm_finder.h"
 #include "task_finder.h"
+#include "cscommon.h"
 #include "csclient.h"
 #include "client-nss.h"
 #include "remote.h"
@@ -177,7 +178,7 @@ printscript(systemtap_session& s, ostream& o)
                     {
                       // We want to print the probe point signature (without the nested components).
                       std::ostringstream sig;
-                      p->printsig(sig, false);
+                      p->printsig_nonest(sig);
 
                       if (s.dump_mode == systemtap_session::dump_matched_probes_vars && isatty(STDOUT_FILENO))
                         o << s.colorize(sig.str(), "source");
@@ -382,6 +383,7 @@ sdt_benchmark_thread(unsigned long i, double fp1, float fp2)
   fp2 += 0.0;
   double fp_local1 = 1.01;
   float fp_local2 = 2.02;
+  PROBE2(stap, benchmark__fp, fp1+fp_local1, fp2+fp_local2);
   double fp_local3 = 3.03;
   double fp_local4 = 4.04;
   double fp_local5 = 5.05;
@@ -1171,6 +1173,24 @@ passes_0_4 (systemtap_session &s)
 	  if (s.need_uprobes)
 	    rc = uprobes_pass(s);
 
+#if HAVE_NSS
+	  if (s.module_sign_given)
+	    {
+	      // when run on client as --sign-module, mok fingerprints are result of mokutil -l
+	      // when run from server as --sign-module=PATH, mok fingerprint is given by PATH
+	      string mok_path;
+	      if (!s.module_sign_mok_path.empty())
+		{
+		  string mok_fingerprint;
+		  split_path (s.module_sign_mok_path, mok_path, mok_fingerprint);
+		  s.mok_fingerprints.clear();
+		  s.mok_fingerprints.push_back(mok_fingerprint);
+		}
+	      rc =
+		sign_module (s.tmpdir, s.module_filename(), s.mok_fingerprints, mok_path, s.kernel_build_tree);
+	    }
+#endif
+
 	  // If our last pass isn't 5, we're done (since passes 3 and
 	  // 4 just generate what we just pulled out of the cache).
 	  assert_no_interrupts();
@@ -1302,7 +1322,25 @@ passes_0_4 (systemtap_session &s)
             copy_file(s.uprobes_path, "uprobes/uprobes.ko", s.verbose > 1);
         }
     }
+  
+#if HAVE_NSS
+  if (s.module_sign_given)
+    {
+      // when run on client as --sign-module, mok fingerprints are result of mokutil -l
+      // when run from server as --sign-module=PATH, mok fingerprint is given by PATH
+      string mok_path;
+      if (!s.module_sign_mok_path.empty())
+	{
+	  string mok_fingerprint;
+	  split_path (s.module_sign_mok_path, mok_path, mok_fingerprint);
+	  s.mok_fingerprints.clear();
+	  s.mok_fingerprints.push_back(mok_fingerprint);
+	}
 
+      rc = sign_module (s.tmpdir, s.module_filename(), s.mok_fingerprints, mok_path, s.kernel_build_tree);
+    }
+#endif
+  
   PROBE1(stap, pass4__end, &s);
 
   return rc;
@@ -1563,6 +1601,11 @@ main (int argc, char * const argv [])
   catch (const exit_exception& e) {
       // Exiting for any quiet reason.
       return e.rc;
+  }
+  catch (const bad_alloc &e) {
+      cerr << "Out of memory.   Please check --rlimit-as and memory availability." << endl;
+      cerr << e.what() << endl;
+      return EXIT_FAILURE;
   }
   catch (const exception &e) {
       // Some other uncaught exception.

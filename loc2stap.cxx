@@ -247,10 +247,11 @@ location_context::new_local(const char *namebase)
 {
   static int counter;
   vardecl *var = new vardecl;
-  var->name = std::string(namebase) + lex_cast(counter++);
+  var->unmangled_name = var->name = std::string(namebase) + lex_cast(counter++);
   var->type = pe_long;
   var->arity = 0;
   var->synthetic = true;
+  var->tok = e->tok;
   this->locals.push_back(var);
 
   return new_symref(var);
@@ -701,6 +702,7 @@ location_context::translate (const Dwarf_Op *expr, const size_t len,
 	    break;
 
           case DW_OP_GNU_push_tls_address:
+          case DW_OP_form_tls_address:
             {
               POP(addr);
               functioncall *fc = new functioncall;
@@ -888,10 +890,12 @@ location_context::frame_location()
 	fb_ops = fb_expr;
 
       location *fb_loc = translate (fb_ops, fb_len, 0, NULL, false, false);
-      assert(fb_loc->type == loc_address);
+      if (fb_loc->type != loc_address)
+        throw SEMANTIC_ERROR("expected loc_address");
 
       this->frame_base = new_local("_fb_");
       assignment *set = new assignment;
+      set->tok = e->tok;
       set->op = "=";
       set->left = this->frame_base;
       set->right = fb_loc->program;
@@ -1506,7 +1510,7 @@ max_fetch_size (Dwarf_Die *die)
   if (cu == NULL)
     throw SEMANTIC_ERROR(std::string("cannot determine compilation unit "
 				     "address size from ")
-			 + dwarf_diename (die)
+			 + (dwarf_diename (die) ?: "<anonymous>")
 			 + " " + dwarf_errmsg (-1));
 
   return address_size;
@@ -1761,6 +1765,9 @@ location_context::handle_GNU_parameter_ref (Dwarf_Op expr)
   // all the call site values for the parameter.
   dw->focus_on_function (this->function);
   dw->iterate_over_call_sites (get_call_site_values, this);
+
+  if (call_site_values.size() == 0)
+    throw SEMANTIC_ERROR("no DW_TAG_GNU_call_sites found", e->tok);
 
   // Now in order to determine which call site the probed function was called
   // from we need to unwind the registers and look at the pc value at the caller's

@@ -63,7 +63,7 @@ same convenience variables.
 <row><entry>
     bdflush
 </entry><entry>
-    data, data_str, func
+    $id, $regs, data, data_str, func, int, pt_regs*
 </entry></row>
 <row><entry>
     bind
@@ -208,7 +208,7 @@ same convenience variables.
 <row><entry>
     compat_lookup_dcookie
 </entry><entry>
-    buffer_uaddr, cookie, len
+    $id, $regs, buffer_uaddr, cookie, int, len, pt_regs*
 </entry></row>
 <row><entry>
     compat_nanosleep
@@ -404,6 +404,11 @@ same convenience variables.
     faccessat
 </entry><entry>
     dirfd, dirfd_str, mode, mode_str, pathname, pathname_unquoted
+</entry></row>
+<row><entry>
+    faccessat2
+</entry><entry>
+    dirfd, dirfd_str, flags, flags_str, mode, mode_str, pathname, pathname_unquoted
 </entry></row>
 <row><entry>
     fadvise64
@@ -838,7 +843,7 @@ same convenience variables.
 <row><entry>
     lookup_dcookie
 </entry><entry>
-    buffer_uaddr, cookie, len
+    $id, $regs, buffer_uaddr, cookie, int, len, pt_regs*
 </entry></row>
 <row><entry>
     lremovexattr
@@ -879,6 +884,11 @@ same convenience variables.
     memfd_create
 </entry><entry>
     flags, flags_str, uname, uname_unquoted
+</entry></row>
+<row><entry>
+    memfd_secret
+</entry><entry>
+    flags, flags_str
 </entry></row>
 <row><entry>
     migrate_pages

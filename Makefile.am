@@ -20,7 +20,7 @@ AM_CPPFLAGS = -DBINDIR='"$(bindir)"' \
 AM_CFLAGS = -D_GNU_SOURCE -fexceptions -Wall -Wextra -Werror -Wunused -Wformat=2 -W
 AM_CXXFLAGS = -Wall -Wextra -Werror
 
-bin_SCRIPTS = stap-report
+bin_SCRIPTS = stap-report stap-profile-annotate
 pkglibexec_SCRIPTS = stap-env
 oldinclude_HEADERS = includes/sys/sdt.h includes/sys/sdt-config.h
 
@@ -52,9 +52,10 @@ stap_SOURCES = main.cxx session.cxx \
 	setupdwfl.cxx remote.cxx privilege.cxx cmdline.cxx \
 	tapset-dynprobe.cxx tapset-method.cxx translator-output.cxx \
         stapregex.cxx stapregex-tree.cxx stapregex-parse.cxx \
-	stapregex-dfa.cxx stringtable.cxx tapset-python.cxx
+	stapregex-dfa.cxx stringtable.cxx tapset-python.cxx \
+	analysis.cxx
 noinst_HEADERS = sdt_types.h
-stap_LDADD = @stap_LIBS@ @sqlite3_LIBS@ @LIBINTL@ -lpthread @debuginfod_LIBS@
+stap_LDADD = @stap_LIBS@ @sqlite3_LIBS@ @LIBINTL@ -lpthread @debuginfod_LIBS@ @DYNINST_LDFLAGS@ @DYNINST_LIBS@
 stap_DEPENDENCIES =
 
 if HAVE_LIBREADLINE
@@ -127,9 +128,9 @@ cscope:
 PHONIES =
 if BUILD_TRANSLATOR
 stap_CFLAGS = $(AM_CFLAGS) @PIECFLAGS@
-stap_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@
+stap_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ @ALIGNEDNEW@
 stap_CPPFLAGS = $(AM_CPPFLAGS) -DSTAP_SDT_V2
-stap_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@
+stap_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@ @BOOST_SYSTEM_LIB@
 
 if HAVE_AVAHI
 stap_CXXFLAGS += $(avahi_CFLAGS)
@@ -147,6 +148,10 @@ stap_CFLAGS += $(nss_CFLAGS) -DSTAP
 stap_CXXFLAGS += $(nss_CFLAGS)
 stap_CPPFLAGS += $(nss_CFLAGS)
 stap_LDADD += $(nss_LIBS)
+
+if HAVE_DYNINST
+stap_CXXFLAGS += $(DYNINST_CXXFLAGS)
+endif
 
 install-exec-local: install-scripts
 
@@ -430,7 +435,7 @@ install-uprobes:
 .PHONY: $(PHONIES)
 
 dist-gzip:
-	cd $(srcdir); git status | grep working.directory.clean || (echo "You should commit your changes before 'make rpm'.")
+	cd $(srcdir); git status | egrep 'working.(tree|directory).clean' || (echo "You should commit your changes before 'make rpm'.")
 	(cd $(srcdir); git archive --prefix=systemtap-$(VERSION)/ --format=tar HEAD) | gzip > systemtap-$(VERSION).tar.gz
 
 rpm: dist-gzip

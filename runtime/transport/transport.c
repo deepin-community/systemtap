@@ -24,6 +24,9 @@
 #ifdef STAPCONF_LOCKDOWN_DEBUGFS
 #include <linux/security.h>
 #endif
+#ifdef STAPCONF_514_PANIC
+#include <linux/panic_notifier.h>
+#endif
 #include "../uidgid_compatibility.h"
 
 static int _stp_exit_flag = 0;
@@ -69,8 +72,11 @@ static inline void _stp_unlock_inode(struct inode *inode);
 #include "procfs.c"
 #include "control.c"
 
-static unsigned _stp_nsubbufs = 256;
-static unsigned _stp_subbuf_size = STP_BUFFER_SIZE;
+/* set default buffer parameters.  User may override these via stap -s #, and
+   the runtime may auto-shrink it on low memory machines too. */
+/* NB: Note default in man/stap.1.in */
+static unsigned _stp_nsubbufs = 16*1024*1024 / PAGE_SIZE;
+static unsigned _stp_subbuf_size = PAGE_SIZE;
 
 /* module parameters */
 static int _stp_bufsize;
@@ -360,6 +366,13 @@ static int _stp_handle_kallsyms_lookups(void)
                 goto err0;
         }
 #endif
+#if !defined(STAPCONF_GET_MM_EXE_FILE_EXPORTED) && (defined(get_file_rcu) || LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0))
+        kallsyms_get_mm_exe_file = (void*) kallsyms_lookup_name ("get_mm_exe_file");
+        if (kallsyms_get_mm_exe_file == NULL) {
+                _stp_error("Can't resolve get_mm_exe_file!");
+                goto err0;
+        }
+#endif
 #endif
 #if defined(CONFIG_KALLSYMS) && !defined(STAPCONF_KALLSYMS_LOOKUP_NAME_EXPORTED)
         {
@@ -414,7 +427,7 @@ static void _stp_cleanup_and_exit(int send_exit)
 
 		failures = atomic_read(&_stp_transport_failures);
 		if (failures)
-			_stp_warn("There were %d transport failures.\n", failures);
+			_stp_warn("There were %d transport failures. Try stap -s to increase the buffer size from %d.\n", failures, _stp_bufsize);
 
 		dbug_trans(1, "*** calling _stp_transport_data_fs_stop ***\n");
 		_stp_transport_data_fs_stop();
@@ -592,17 +605,28 @@ static int _stp_transport_init(void)
         _stp_need_kallsyms_stext = 0;
 #endif
 
-	if (_stp_bufsize) {
-		unsigned size = _stp_bufsize * 1024 * 1024;
-		_stp_subbuf_size = 65536;
-		while (size / _stp_subbuf_size > 64 &&
-		       _stp_subbuf_size < 1024 * 1024) {
-			_stp_subbuf_size <<= 1;
-		}
+        if (_stp_bufsize == 0) { // option not specified?
+		struct sysinfo si;
+                long _stp_bufsize_avail;
+                si_meminfo(&si);
+                _stp_bufsize_avail = (long)((si.freeram + si.bufferram) / 4 / num_online_cpus())
+                        << PAGE_SHIFT; // limit to quarter of free ram total, divided between cpus
+                if ((_stp_nsubbufs * _stp_subbuf_size) > _stp_bufsize_avail) {
+                        _stp_bufsize = max_t (int, 1, _stp_bufsize_avail / 1024 / 1024);
+                        dbug_trans(1, "Shrinking default _stp_bufsize to %d MB/cpu due to low free memory\n", _stp_bufsize);
+                }
+        }      
+        
+	if (_stp_bufsize) { // overridden by user or by si_meminfo heuristic?
+		long size = _stp_bufsize * 1024 * 1024;
+		_stp_subbuf_size = 1 << PAGE_SHIFT; // XXX: allow this to be bumped up too?
 		_stp_nsubbufs = size / _stp_subbuf_size;
-		dbug_trans(1, "Using %d subbufs of size %d\n", _stp_nsubbufs, _stp_subbuf_size);
 	}
 
+        _stp_bufsize = (long)_stp_subbuf_size * (long)_stp_nsubbufs / 1024 / 1024; // for diagnostics later
+        dbug_trans(1, "Using %d subbufs of size %d * %d CPUs\n",
+                   _stp_nsubbufs, _stp_subbuf_size, num_online_cpus());
+        
 	ret = _stp_transport_fs_init(THIS_MODULE->name);
 	if (ret)
 		goto err0;

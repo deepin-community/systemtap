@@ -2,12 +2,12 @@
 .\"     Title: probe::nfsd.unlink
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: May 2021
+.\"      Date: November 2022
 .\"    Manual: Network File Storage Tapsets
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::NFSD\&.UNLINK" "3stap" "May 2021" "SystemTap Tapset Reference" "Network File Storage Tapsets"
+.TH "PROBE::NFSD\&.UNLINK" "3stap" "November 2022" "SystemTap Tapset Reference" "Network File Storage Tapsets"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -36,9 +36,9 @@ nfsd\&.unlink
 .fi
 .SH "VALUES"
 .PP
-\fItype\fR
+\fIfh\fR
 .RS 4
-file type (file or dir)
+file handle (the first part is the length of the file handle)
 .RE
 .PP
 \fIfilelen\fR
@@ -51,14 +51,14 @@ the length of file name
 the ip address of client
 .RE
 .PP
-\fIfh\fR
-.RS 4
-file handle (the first part is the length of the file handle)
-.RE
-.PP
 \fIfilename\fR
 .RS 4
 file name
+.RE
+.PP
+\fItype\fR
+.RS 4
+file type (file or dir)
 .RE
 .SH SEE ALSO\n 
 .IR tapset::nfsd (3stap)

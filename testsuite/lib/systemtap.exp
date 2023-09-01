@@ -182,10 +182,6 @@ proc min_kernel_vers_p {min} {
 }
 
 proc bpf_p {} {
-    # TODO Temporarily disable on 5.11+ due to rhbz1938312
-    if {[min_kernel_vers_p 5.11]} {
-        return 0
-    }
     # configure.ac checks for <linux/bpf.h>, so we will too.
     return [file exists "/usr/include/linux/bpf.h"]
 }
@@ -764,7 +760,12 @@ proc systemtap_finish {args} {
     }
 }
 
-proc systemtap_version {} {}
+proc systemtap_version {} {
+    set location [exec /usr/bin/which stap]
+    regexp {version [^)]*} [exec stap -V 2>@ stdout] version
+
+    clone_output "$location $version"
+}
 
 proc stap_run_batch {filename args} {
     if {[string length $filename]} {

@@ -1,5 +1,5 @@
 ." -*- nroff -*-
-.TH TAPSET::SYSCALLS 3stap "May 2021" "Systemtap Tapset Reference"
+.TH TAPSET::SYSCALLS 3stap "November 2022" "Systemtap Tapset Reference"
 .SH NAME
 tapset::syscalls \- systemtap syscall tapset
 
@@ -47,7 +47,7 @@ addr, code, code_str
 .P
 .TP
 .B syscall.bdflush
-data, data_str, func
+$id, $regs, data, data_str, func, int, pt_regs*
 .P
 .TP
 .B syscall.bind
@@ -163,7 +163,7 @@ value_uaddr, which
 .P
 .TP
 .B syscall.compat_lookup_dcookie
-buffer_uaddr, cookie, len
+$id, $regs, buffer_uaddr, cookie, int, len, pt_regs*
 .P
 .TP
 .B syscall.compat_nanosleep
@@ -320,6 +320,10 @@ status
 .TP
 .B syscall.faccessat
 dirfd, dirfd_str, mode, mode_str, pathname, pathname_unquoted
+.P
+.TP
+.B syscall.faccessat2
+dirfd, dirfd_str, flags, flags_str, mode, mode_str, pathname, pathname_unquoted
 .P
 .TP
 .B syscall.fadvise64
@@ -667,7 +671,7 @@ fd, offset_high, offset_low, result_uaddr, whence, whence_str
 .P
 .TP
 .B syscall.lookup_dcookie
-buffer_uaddr, cookie, len
+$id, $regs, buffer_uaddr, cookie, int, len, pt_regs*
 .P
 .TP
 .B syscall.lremovexattr
@@ -700,6 +704,10 @@ cmd, cmd_str, flags
 .TP
 .B syscall.memfd_create
 flags, flags_str, uname, uname_unquoted
+.P
+.TP
+.B syscall.memfd_secret
+flags, flags_str
 .P
 .TP
 .B syscall.migrate_pages

@@ -1,6 +1,8 @@
---- a/dtrace.in
-+++ b/dtrace.in
-@@ -422,7 +422,7 @@
+Index: systemtap/dtrace.in
+===================================================================
+--- systemtap.orig/dtrace.in
++++ systemtap/dtrace.in
+@@ -439,7 +439,7 @@ def main():
          cflags = "-g " + os.environ.get("CFLAGS", "").replace('\\\n', ' ').replace('\\\r',' ')
          # sanitize any embedded \n etc. goo; PR21063
          retcode = call(split(cc1) + defines + includes + split(cflags) +
