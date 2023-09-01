@@ -1,14 +1,14 @@
 dnl configure.ac --- autoconf input file for systemtap
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT([systemtap], 4.5, systemtap@sourceware.org, systemtap)
+AC_INIT([systemtap],[4.8],[systemtap@sourceware.org],[systemtap])
 dnl                  ^^^ see also NEWS, systemtap.spec, testsuite/configure.ac
 dnl                      doc/SystemTap_Beginners_Guide/en-US/Book_Info.xml
 
 dnl Get the target arch for libHelperSDT.so
 AC_CANONICAL_TARGET
 
-AC_PREREQ(2.63)
+AC_PREREQ([2.71])
 dnl We don't maintain a ChangeLog, which makes us non-GNU -> foreign.
 AM_INIT_AUTOMAKE([no-dist foreign])
 AM_MAINTAINER_MODE
@@ -88,12 +88,8 @@ fi
 AS_VAR_APPEND([ac_configure_args], [" python='$PYTHON' pyexecdir='$pyexecdir'"])
 
 # Now let's try to find python version 3.
-if test "x$PYTHON_UNKNOWN" != "xno" -a "x$ac_cv_python_unknown_version" = "x3"; then
-   AC_PATH_PROG([PYTHON3], [python])
-else
-   AC_PATH_PROGS([PYTHON3],
-		 [python3 python3.7 python3.6 python3.5 python3.4 python3.3 python3.2 python3.1 python3.0], [:])
-fi
+AC_PATH_PROGS([PYTHON3],
+              	 [python3 python3.7 python3.6 python3.5 python3.4 python3.3 python3.2 python3.1 python3.0], [:])
 python3_basename=$(basename "$PYTHON3")
 AC_DEFINE_UNQUOTED([PYTHON3_BASENAME], "${python3_basename}",
 		   [Base name of the python3 interpreter binary.])
@@ -190,60 +186,16 @@ AS_IF([test "x$HAVE_CXX11" != x1],[
   AC_LANG_POP(C++)
   ])
 
-AC_ARG_ENABLE([ssp],
-  [AS_HELP_STRING([--disable-ssp], [disable gcc stack-protector])])
-AS_IF([test "x$enable_ssp" != xno],[
-   save_CFLAGS="$CFLAGS"
-   save_CXXFLAGS="$CXXFLAGS"
-   CXXFLAGS="-Werror -fstack-protector-all -D_FORTIFY_SOURCE=2 $CXXFLAGS"
-   CFLAGS="-Werror -fstack-protector-all -D_FORTIFY_SOURCE=2 $CFLAGS"
-   AC_COMPILE_IFELSE([AC_LANG_SOURCE([int something ();])], [
-       AC_MSG_NOTICE([Compiling with gcc -fstack-protector-all et al.])
-	CFLAGS="-fstack-protector-all -D_FORTIFY_SOURCE=2 $save_CFLAGS"
-	CXXFLAGS="-fstack-protector-all -D_FORTIFY_SOURCE=2 $save_CXXFLAGS"],[
-       AC_MSG_NOTICE([Compiler does not support -fstack-protector-all et al.])
-       CFLAGS="$save_CFLAGS"
-       CXXFLAGS="$save_CXXFLAGS"])])
+dnl Some versions of dyninst (10.1) need -faligned-new
+dnl If -faligned-new available, pass it in
+AC_LANG_PUSH(C++)
+AX_CHECK_COMPILE_FLAG([-faligned-new], ALIGNEDNEW="-faligned-new", ALIGNEDNEW="")
+AC_LANG_POP(C++)
 
+AC_SUBST(ALIGNEDNEW)
 
-dnl Link with gold if possible
-dnl but: https://bugzilla.redhat.com/show_bug.cgi?id=636603
-dnl
-dnl AC_PATH_PROG(GOLD, [ld.gold], [no])
-dnl if test "x$GOLD" != "xno"
-dnl then
-dnl   mkdir -p Bdir
-dnl   ln -sf $GOLD Bdir/ld
-dnl   LDFLAGS="$LDFLAGS -B`pwd`/Bdir/"
-dnl   AC_MSG_NOTICE([using ld.gold to link])
-dnl fi
-
-
-# Compiling with fPIE by default (but see PR 9922)
-AC_ARG_ENABLE([pie],
-  [AS_HELP_STRING([--enable-pie], [enable position-independent-executable])])
-AS_IF([test "x$enable_pie" != xno],[
-   PIECFLAGS='-fPIE'
-   PIECXXFLAGS='-fPIE'
-   PIELDFLAGS='-pie -Wl,-z,relro -Wl,-z,now'
-   save_CFLAGS="$CFLAGS"
-   save_CXXFLAGS="$CXXFLAGS"
-   save_LDFLAGS="$LDFLAGS"
-   CFLAGS="$CFLAGS $PIECFLAGS"
-   CXXFLAGS="$CXXFLAGS $PIECXXFLAGS"
-   LDFLAGS="$LDFLAGS $PIELDFLAGS"
-   AC_LINK_IFELSE([AC_LANG_SOURCE([void main () {}])], [
-       AC_MSG_NOTICE([Compiling with gcc pie et al.])
-   ], [
-       AC_MSG_NOTICE([Compiler does not support -pie et al.])
-       PIECFLAGS=""
-       PIECXXFLAGS=""
-       PIELDFLAGS=""
-   ])
-   CFLAGS="$save_CFLAGS"
-   CXXFLAGS="$save_CXXFLAGS"
-   LDFLAGS="$save_LDFLAGS"
-])
+dnl Carry forward some empty PIE*FLAGS so we don't have to modify
+dnl all the Makefile.am's just now.
 AC_SUBST(PIELDFLAGS)
 AC_SUBST(PIECFLAGS)
 AC_SUBST(PIECXXFLAGS)
@@ -251,7 +203,7 @@ AC_SUBST(PIECXXFLAGS)
 dnl Handle optional debuginfod support. If not specified by the user,
 dnl use it if present.
 AC_ARG_WITH([debuginfod],
-  AC_HELP_STRING([--with-debuginfod], [Enable debuginfo lookups with debuginfod (auto/yes/no)]),
+  AS_HELP_STRING([--with-debuginfod],[Enable debuginfo lookups with debuginfod (auto/yes/no)]),
                  [], [with_debuginfod=auto])
 AC_MSG_CHECKING([whether to use debuginfod])
 AC_MSG_RESULT([$with_debuginfod])
@@ -538,6 +490,12 @@ if test "$with_rpm" != "no"; then
   fi
 fi
 
+dnl Look for rpmcrypto.h
+AC_CHECK_HEADERS([rpm/rpmcrypto.h], [
+		    AC_DEFINE([HAVE_RPMCRYPTO_H],[1],[have rpmcrypto_h])
+                      have_rpmcrypto_h=yes
+		      AC_MSG_NOTICE([separate rpm/rpmcrypto.h])])
+
 dnl Look for readline.
 dnl
 dnl First save the orignal value of LIBS.
@@ -663,12 +621,42 @@ AC_ARG_WITH([dyninst],
 case "$with_dyninst" in
 no) ;;
 ''|yes) # Try a simple-minded distro search
-     DYNINST_CXXFLAGS="-I/usr/include/dyninst"
-     DYNINST_LDFLAGS="-L/usr/lib64/dyninst -L/usr/lib/dyninst" # XXX both lib paths!?!
+     DYNINST_CXXFLAGS=""
+     old_LIBS="$LIBS"
+     old_LDFLAGS="$LDFLAGS"
+     AC_LANG_PUSH(C++)
+     for location in /usr/lib64/dyninst /usr/lib/dyninst ${libdir}/dyninst; do
+       LDFLAGS="-L${location}"
+         LIBS="-lparseAPI ${BOOST_SYSTEM_LIB}"
+	   AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <dyninst/CodeSource.h>]],
+					   [[char *s; Dyninst::ParseAPI::SymtabCodeSource *sts = new Dyninst::ParseAPI::SymtabCodeSource(s);]])],
+
+					   [found_DYNINST_LDFLAGS=yes],[found_DYNINST_LDFLAGS=no])
+       if test "$found_DYNINST_LDFLAGS" = "yes"; then
+         DYNINST_LDFLAGS="$LDFLAGS"
+	 break
+       fi
+     done
+     AC_LANG_POP(C++)
+     LDFLAGS="$old_LDFLAGS"
+     LIBS="$old_LIBS"
+
+     # Add Dyninst libraries only if they are available
+     if test -d "/usr/include/dyninst"; then
+       save_LIBS="$LIBS"
+       AC_CHECK_LIB(tbb, TBB_runtime_interface_version, [tbb_LIBS=-ltbb],[tbb_LIBS=])       
+       LIBS="$save_LIBS"
+       DYNINST_LIBS="-lparseAPI -lsymtabAPI -linstructionAPI $tbb_LIBS -lcommon"
+     fi
      ;;
 *)  # Use paths in the user-specified prefix
     DYNINST_CXXFLAGS="-I$with_dyninst/include"
-    DYNINST_LDFLAGS="-L$with_dyninst/lib/" # XXX need lib64 too?
+    DYNINST_LDFLAGS="-L$with_dyninst/lib64/dyninst -Wl,-rpath-link,$with_dyninst/lib64/dyninst"
+    # Will assume Dyninst libraries are available as the path is specified
+    save_LIBS="$LIBS"
+    AC_CHECK_LIB(tbb, TBB_runtime_interface_version, [tbb_LIBS=-ltbb],[tbb_LIBS=])       
+    LIBS="$save_LIBS"
+    DYNINST_LIBS="-lparseAPI -lsymtabAPI -linstructionAPI $tbb_LIBS -lcommon"
     ;;
 esac
 if test "$with_dyninst" != "no"; then
@@ -676,9 +664,10 @@ if test "$with_dyninst" != "no"; then
   old_CPPFLAGS="$CPPFLAGS"
   CPPFLAGS="$CPPFLAGS $DYNINST_CXXFLAGS"
   AC_MSG_NOTICE([checking dyninst support])
-  AC_CHECK_HEADERS([BPatch_object.h], [
+  AC_CHECK_HEADERS([dyninst/BPatch_object.h], [
       AC_SUBST(DYNINST_CXXFLAGS)
       AC_SUBST(DYNINST_LDFLAGS)
+      AC_SUBST(DYNINST_LIBS)
       AC_DEFINE([HAVE_DYNINST],[1],[Define to 1 if Dyninst is enabled])
       have_dyninst=yes
       AC_MSG_NOTICE([dyninst support available])])
@@ -883,6 +872,7 @@ AC_ARG_WITH([java],
   [with_java=/usr/lib/jvm/java])
 dnl don't use AC_CHECK_FILE here, as that blocks cross-compiling
 if test ! -d "$with_java"; then
+   AC_MSG_NOTICE([directory $with_java not found, disabling java support])
    with_java=no
 fi
 AC_SUBST(JAVADIR, "${with_java}") # always needed to compile
@@ -998,6 +988,7 @@ AC_CONFIG_FILES([staprun/guest/stapshd], [chmod +x staprun/guest/stapshd])
 AC_CONFIG_FILES([staprun/guest/stapsh-daemon], [chmod +x staprun/guest/stapsh-daemon])
 AC_CONFIG_FILES([staprun/guest/stapsh@.service])
 AC_CONFIG_FILES(stap-exporter/Makefile)
+AC_CONFIG_FILES([stap-profile-annotate], [chmod +x stap-profile-annotate])
 
 dnl AC_CONFIG_FILES([macros.systemtap])
 dnl ^^^ not that one, because we want to expand $vars etc. to fqdn's,

@@ -1,5 +1,5 @@
 // bpf internal classes
-// Copyright (C) 2016-2019 Red Hat Inc.
+// Copyright (C) 2016-2022 Red Hat Inc.
 //
 // This file is part of systemtap, and is free software.  You can
 // redistribute it and/or modify it under the terms of the GNU General
@@ -65,6 +65,9 @@ enum bpf_target {
 #define BPF_MAXSTRINGLEN_PLUS 65
 // #define BPF_MAXSTRINGLEN 128 // TODO: Longer strings require a smarter storage allocator.
 // #define BPF_MAXSTRINGLEN_PLUS 129
+// For foreach sorting, composite map keys cannot exceed kernel stack size:
+#define BPF_MAXKEYLEN 512
+#define BPF_MAXKEYLEN_PLUS 513
 #define BPF_MAXFORMATLEN 256
 #define BPF_MAXPRINTFARGS 32
 // #define BPF_MAXPRINTFARGS 3 // Maximum for trace_printk() method.
@@ -79,7 +82,9 @@ enum bpf_target {
 #define BPF_TRANSPORT_ARG uint64_t
 // XXX: BPF_TRANSPORT_ARG is for small numerical arguments, not pe_long values.
 
-// Constants for array sorting.
+// DEPRECATED constants for foreach sorting.
+// Kept in the unlikely case we want to use new stapbpf to load old .bo's.
+// Use globals::foreach_info instead for generating new .bo's.
 //
 // XXX Helpers take at most 5 arguments from BPF code.  Hence we
 // combine a couple arguments into one sort_flags for the
@@ -92,7 +97,6 @@ enum bpf_target {
   ((int64_t)((sort_flags) & 0xf) - 1)
 // int sort_direction; // -1: decreasing, 0: none, 1: increasing
 // unsigned sort_column; // 0: value, 1..N: index
-// TODO PR24528: also encode s->sort_aggr
 
 // Will print out bpf assembly before and after optimization:
 //#define DEBUG_CODEGEN
@@ -167,6 +171,37 @@ bool is_ldst(opcode c);
 bool is_binary(opcode c);
 bool is_commutative(opcode c);
 
+/* PR29307: BPF opcode categories for the embedded-code assembler: */
+#define BPF_UNKNOWN_ARI 0
+#define BPF_MEMORY_ARI4 1
+#define BPF_BRANCH_ARI4 2
+#define BPF_MEMORY_ARI34_SRCOFF 3
+// -> can take [src+off]
+#define BPF_MEMORY_ARI34_DSTOFF_IMM 4
+// -> can take [dst+off]+imm
+#define BPF_MEMORY_ARI34_DSTOFF 5
+// -> can take [dst+off]+src
+#define BPF_ALU_ARI3 6
+// -> takes dst+src/imm
+#define BPF_MEMORY_ARI3 7
+// -> takes dst+imm
+#define BPF_ALU_ARI2 8
+// -> takes dst
+#define BPF_BRANCH_ARI2 9
+// -> takes jmp_target
+#define BPF_CALL_ARI2 10
+// -> takes imm
+#define BPF_EXIT_ARI1 11
+
+/* PR29307: BPF opcode lookup for the embedded-code assembler: */
+void init_bpf_opcode_tables();
+const char *bpf_opcode_name (opcode code);
+opcode bpf_opcode_id (const std::string &name);
+opcode bpf_opcode_variant_imm(opcode code);
+unsigned bpf_opcode_category (opcode code);
+const char *bpf_expected_args (unsigned cat);
+
+/* BPF helper lookup for the translator: */
 void init_bpf_helper_tables();
 const char *bpf_function_name (unsigned id);
 bpf_func_id bpf_function_id (const std::string &name);
@@ -473,6 +508,33 @@ struct globals
   std::unordered_map<vardecl *, agg_idx> aggregates;
 
   // The .bo ELF file will have a section (agg_idx -> interned_stats_map).
+
+  // PR23478: To pass foreach iteration settings, assign each foreach loop
+  // a numerical index into a table of these foreach_info structs.
+  // Pass the index into the map_get_next_key userspace-only helper.
+  struct foreach_info {
+    // XXX replicate fields from struct foreach_loop in staptree.h
+    int sort_direction; // -1: decreasing, 0: none, 1: increasing
+    unsigned sort_column; // 0: value, 1..N: index
+    // TODO PR24908: also encode s->sort_aggr
+
+    // used to locate the sort column in a composite map key
+    size_t keysize;
+    size_t sort_column_size; // 0: sort_column is value
+    int sort_column_ofs; // -1: key is scalar long or str
+  };
+  std::vector<foreach_info> foreach_loop_info;
+
+  /// XXX Used to store loop_info structs for serialization:
+  typedef std::vector<uint64_t> interned_foreach_info;
+  static const size_t n_foreach_info_fields = 5;
+  static interned_foreach_info intern_foreach_info(const foreach_info &fi);
+  static foreach_info deintern_foreach_info(const interned_foreach_info &ifi);
+
+  using loop_idx = int;
+  // XXX: Not actually used in any tables.
+
+  // The .bo ELF file will have a section (loop_idx -> interned_loop_info).
 
   // Index into globals. This element represents the map of internal globals
   // used for sharing data between stapbpf and kernel-side bpf programs.

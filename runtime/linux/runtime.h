@@ -65,6 +65,22 @@
 static void *kallsyms_copy_to_kernel_nofault;
 #endif
 
+
+/* A fallthrough; macro to let the runtime survive -Wimplicit-fallthrough=5 */
+/* from <linux/compiler_attribute.h> */
+#ifndef fallthrough
+#if __GNUC__ < 5
+# define fallthrough                    do {} while (0)  /* fallthrough */
+#else
+#if __has_attribute(__fallthrough__)
+# define fallthrough                    __attribute__((__fallthrough__))
+#else
+# define fallthrough                    do {} while (0)  /* fallthrough */
+#endif
+#endif
+#endif
+
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,23)
 #include <linux/user_namespace.h>
 #endif
@@ -183,7 +199,7 @@ static struct
    Only define STP_USE_DWARF_UNWINDER when STP_NEED_UNWIND_DATA,
    as set through a pragma:unwind in one of the [u]context-unwind.stp
    functions. */
-#if (defined(__arm__) || defined(__i386__) || defined(__x86_64__) || defined(__powerpc64__)) || defined (__s390x__) || defined(__aarch64__) || defined(__mips__)
+#if (defined(__arm__) || defined(__i386__) || defined(__x86_64__) || defined(__powerpc64__)) || defined (__s390x__) || defined(__aarch64__) || defined(__mips__) || defined(__riscv)
 #ifdef STP_NEED_UNWIND_DATA
 #ifndef STP_USE_DWARF_UNWINDER
 #define STP_USE_DWARF_UNWINDER
@@ -238,6 +254,9 @@ static void *kallsyms_signal_wake_up;
 #endif
 #if !defined(STAPCONF___LOCK_TASK_SIGHAND_EXPORTED)
 static void *kallsyms___lock_task_sighand;
+#endif
+#if !defined(STAPCONF_GET_MM_EXE_FILE_EXPORTED)
+static void *kallsyms_get_mm_exe_file;
 #endif
 
 #include "access_process_vm.h"

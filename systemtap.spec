@@ -4,14 +4,13 @@
 %{!?with_htmldocs: %global with_htmldocs 0}
 %{!?with_monitor: %global with_monitor 1}
 # crash is not available
-%ifarch ppc ppc64 %{sparc} %{mips}
+%ifarch ppc ppc64 %{sparc} %{mips} %{riscv}
 %{!?with_crash: %global with_crash 0}
 %else
 %{!?with_crash: %global with_crash 1}
 %endif
 %{!?with_rpm: %global with_rpm 1}
 %{!?elfutils_version: %global elfutils_version 0.179}
-%{!?pie_supported: %global pie_supported 1}
 %{!?with_boost: %global with_boost 0}
 %ifarch %{ix86} x86_64 ppc ppc64 ppc64le aarch64
 %{!?with_dyninst: %global with_dyninst 0%{?fedora} >= 18 || 0%{?rhel} >= 7}
@@ -21,7 +20,11 @@
 %{!?with_bpf: %global with_bpf 0%{?fedora} >= 22 || 0%{?rhel} >= 8}
 %{!?with_systemd: %global with_systemd 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
 %{!?with_emacsvim: %global with_emacsvim 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
+%ifarch %{ix86}
+%{!?with_java: %global with_java 0}
+%else
 %{!?with_java: %global with_java 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
+%endif
 %{!?with_debuginfod: %global with_debuginfod 0%{?fedora} >= 25 || 0%{?rhel} >= 7}
 %{!?with_virthost: %global with_virthost 0%{?fedora} >= 19 || 0%{?rhel} >= 7}
 %{!?with_virtguest: %global with_virtguest 1}
@@ -39,6 +42,7 @@
 %{!?with_python3_probes: %global with_python3_probes (0%{?fedora} >= 23 || 0%{?rhel} > 7)}
 %{!?with_httpd: %global with_httpd 0}
 %{!?with_specific_python: %global with_specific_python 0%{?fedora} >= 31}
+%{!?with_sysusers: %global with_sysusers 0%{?fedora} >= 32 || 0%{?rhel} >= 9}
 
 # Virt is supported on these arches, even on el7, but it's not in core EL7
 %if 0%{?rhel} <= 7
@@ -88,8 +92,36 @@
 # To avoid testsuite/*/*.stp has shebang which doesn't start with '/'
 %define __brp_mangle_shebangs_exclude_from .stp$
 
+%define _systemtap_runtime_preinstall \
+# See systemd-sysusers(8) sysusers.d(5)\
+\
+g     stapusr  156\
+g     stapsys  157\
+g     stapdev  158
+
+%define _systemtap_server_preinstall \
+# See systemd-sysusers(8) sysusers.d(5)\
+\
+g     stap-server  -\
+u     stap-server  -      "systemtap compiler server"   /var/lib/stap-server   /sbin/nologin\
+m     stap-server stap-server
+
+
+%define _systemtap_testsuite_preinstall \
+# See systemd-sysusers(8) sysusers.d(5)\
+\
+u     stapusr  -          "systemtap testsuite user"    /   /sbin/nologin\
+u     stapsys  -          "systemtap testsuite user"    /   /sbin/nologin\
+u     stapdev  -          "systemtap testsuite user"    /   /sbin/nologin\
+m     stapusr  stapusr\
+m     stapsys  stapusr\
+m     stapsys  stapsys\
+m     stapdev  stapusr\
+m     stapdev  stapdev
+
+
 Name: systemtap
-Version: 4.5
+Version: 4.8
 Release: 1%{?release_override}%{?dist}
 # for version, see also configure.ac
 
@@ -174,6 +206,7 @@ BuildRequires: xmlto /usr/share/xmlto/format/fo/pdf
 %endif
 %endif
 %if %{with_emacsvim}
+# for _emacs_sitelispdir macros etc.
 BuildRequires: emacs
 %endif
 %if %{with_java}
@@ -196,18 +229,22 @@ BuildRequires: python2-setuptools
 BuildRequires: python-setuptools
 %endif
 %endif
+%if %{with_python3}
+BuildRequires: python3
+%endif
 %if %{with_python3_probes}
 BuildRequires: python3-devel
 BuildRequires: python3-setuptools
-%endif
-%if %{with_specific_python}
-BuildRequires: /usr/bin/pathfix.py
 %endif
 
 %if %{with_httpd}
 BuildRequires: libmicrohttpd-devel
 BuildRequires: libuuid-devel
 %endif
+%if %{with_sysusers}
+BuildRequires:  systemd-rpm-macros
+%endif
+
 
 # Install requirements
 Requires: systemtap-client = %{version}-%{release}
@@ -484,7 +521,7 @@ This package includes support files needed to run systemtap scripts
 that probe python 3 processes.
 %endif
 
-%if %{with_python3}
+%if %{with_python3_probes}
 %package exporter
 Summary: Systemtap-prometheus interoperation mechanism
 License: GPLv2+
@@ -502,7 +539,8 @@ to remote requesters on demand.
 Summary: Systemtap Cross-VM Instrumentation - host
 License: GPLv2+
 URL: http://sourceware.org/systemtap/
-Requires: libvirt >= 1.0.2
+# only require libvirt-libs really
+#Requires: libvirt >= 1.0.2
 Requires: libxml2
 
 %description runtime-virthost
@@ -584,14 +622,6 @@ systemtap-runtime-virthost machine to execute systemtap scripts.
 %global docs_config --enable-docs=prebuilt
 %endif
 
-# Enable pie as configure defaults to disabling it
-%if %{pie_supported}
-%global pie_config --enable-pie
-%else
-%global pie_config --disable-pie
-%endif
-
-
 %if %{with_java}
 %global java_config --with-java=%{_jvmdir}/java
 %else
@@ -641,18 +671,31 @@ systemtap-runtime-virthost machine to execute systemtap scripts.
 # We don't ship compileworthy python code, just oddball samples
 %global py_auto_byte_compile 0
 
-%configure %{dyninst_config} %{sqlite_config} %{crash_config} %{docs_config} %{pie_config} %{rpm_config} %{java_config} %{virt_config} %{dracut_config} %{python3_config} %{python2_probes_config} %{python3_probes_config} %{httpd_config} %{bpf_config} %{debuginfod_config} --disable-silent-rules --with-extra-version="rpm %{version}-%{release}"
-make %{?_smp_mflags}
+%configure %{dyninst_config} %{sqlite_config} %{crash_config} %{docs_config} %{rpm_config} %{java_config} %{virt_config} %{dracut_config} %{python3_config} %{python2_probes_config} %{python3_probes_config} %{httpd_config} %{bpf_config} %{debuginfod_config} --disable-silent-rules --with-extra-version="rpm %{version}-%{release}"
+make %{?_smp_mflags} V=1
 
 
 %install
 make DESTDIR=$RPM_BUILD_ROOT install
+
+%if ! (%{with_python3})
+rm -v $RPM_BUILD_ROOT%{_bindir}/stap-profile-annotate
+%endif
+
 %find_lang %{name}
 for dir in $(ls -1d $RPM_BUILD_ROOT%{_mandir}/{??,??_??}) ; do
     dir=$(echo $dir | sed -e "s|^$RPM_BUILD_ROOT||")
     lang=$(basename $dir)
     echo "%%lang($lang) $dir/man*/*" >> %{name}.lang
 done
+
+%if %{with_sysusers}
+mkdir -p %{buildroot}%{_sysusersdir}
+echo '%_systemtap_runtime_preinstall' > %{buildroot}%{_sysusersdir}/systemtap-runtime.conf
+echo '%_systemtap_server_preinstall' > %{buildroot}%{_sysusersdir}/systemtap-server.conf
+echo '%_systemtap_testsuite_preinstall' > %{buildroot}%{_sysusersdir}/systemtap-testsuite.conf
+%endif
+
 
 ln -s %{_datadir}/systemtap/examples
 
@@ -703,6 +746,9 @@ install -m 644 initscript/logrotate.stap-server $RPM_BUILD_ROOT%{_sysconfdir}/lo
 %if %{with_systemd}
 mkdir -p $RPM_BUILD_ROOT%{_unitdir}
 touch $RPM_BUILD_ROOT%{_unitdir}/systemtap.service
+# RHBZ2070857
+mkdir -p $RPM_BUILD_ROOT%{_presetdir}
+echo 'enable systemtap.service' > $RPM_BUILD_ROOT%{_presetdir}/42-systemtap.preset
 install -m 644 initscript/systemtap.service $RPM_BUILD_ROOT%{_unitdir}/systemtap.service
 mkdir -p $RPM_BUILD_ROOT%{_sbindir}
 install -m 755 initscript/systemtap $RPM_BUILD_ROOT%{_sbindir}/systemtap-service
@@ -773,28 +819,41 @@ done
 
 %if %{with_specific_python}
 # Some files got ambiguous python shebangs, we fix them after everything else is done
-pathfix.py -pni "%{__python3} %{py3_shbang_opts}" %{buildroot}%{python3_sitearch} %{buildroot}%{_bindir}/*
+%py3_shebang_fix %{buildroot}%{python3_sitearch} %{buildroot}%{_bindir}/*
 %endif
 
 %pre runtime
+%if %{with_sysusers}
+echo '%_systemtap_runtime_preinstall' | systemd-sysusers --replace=%{_sysusersdir}/systemtap-runtime.conf -
+%else
 getent group stapusr >/dev/null || groupadd -f -g 156 -r stapusr
 getent group stapsys >/dev/null || groupadd -f -g 157 -r stapsys
 getent group stapdev >/dev/null || groupadd -f -g 158 -r stapdev
+%endif
 exit 0
 
 %pre server
+%if %{with_sysusers}
+echo '%_systemtap_server_preinstall' | systemd-sysusers --replace=%{_sysusersdir}/systemtap-server.conf -
+%else
 getent group stap-server >/dev/null || groupadd -f -g 155 -r stap-server
 getent passwd stap-server >/dev/null || \
   useradd -c "Systemtap Compile Server" -u 155 -g stap-server -d %{_localstatedir}/lib/stap-server -r -s /sbin/nologin stap-server 2>/dev/null || \
   useradd -c "Systemtap Compile Server" -g stap-server -d %{_localstatedir}/lib/stap-server -r -s /sbin/nologin stap-server
+%endif
+exit 0
 
 %pre testsuite
+%if %{with_sysusers}
+echo '%_systemtap_testsuite_preinstall' | systemd-sysusers --replace=%{_sysusersdir}/systemtap-testsuite.conf -
+%else
 getent passwd stapusr >/dev/null || \
     useradd -c "Systemtap 'stapusr' User" -g stapusr -r -s /sbin/nologin stapusr
 getent passwd stapsys >/dev/null || \
     useradd -c "Systemtap 'stapsys' User" -g stapsys -G stapusr -r -s /sbin/nologin stapsys
 getent passwd stapdev >/dev/null || \
     useradd -c "Systemtap 'stapdev' User" -g stapdev -G stapusr -r -s /sbin/nologin stapdev
+%endif
 exit 0
 
 %post server
@@ -815,7 +874,8 @@ if [ ! -f ~stap-server/.systemtap/rc ]; then
   numcpu=`/usr/bin/getconf _NPROCESSORS_ONLN`
   if [ -z "$numcpu" -o "$numcpu" -lt 1 ]; then numcpu=1; fi
   nproc=`expr $numcpu \* 30`
-  echo "--rlimit-as=614400000 --rlimit-cpu=60 --rlimit-nproc=$nproc --rlimit-stack=1024000 --rlimit-fsize=51200000" > ~stap-server/.systemtap/rc
+  # PR29661 -> 4G
+  echo "--rlimit-as=4294967296 --rlimit-cpu=60 --rlimit-nproc=$nproc --rlimit-stack=1024000 --rlimit-fsize=51200000" > ~stap-server/.systemtap/rc
   chown stap-server:stap-server ~stap-server/.systemtap/rc
 fi
 
@@ -871,7 +931,8 @@ exit 0
 
 %post initscript
 %if %{with_systemd}
-    /bin/systemctl enable systemtap.service >/dev/null 2>&1 || :
+    # RHBZ2070857 - use systemd presets instead
+    # /bin/systemctl enable systemtap.service >/dev/null 2>&1 || :
 %else
     /sbin/chkconfig --add systemtap
 %endif
@@ -951,7 +1012,7 @@ if [ "$1" -ge "1" ]; then
 fi
 exit 0
 
-%if %{with_python3}
+%if %{with_python3_probes}
 %if %{with_systemd}
 %preun exporter
 if [ $1 = 0 ] ; then
@@ -1016,11 +1077,17 @@ exit 0
 %doc README README.unprivileged AUTHORS NEWS 
 %{!?_licensedir:%global license %%doc}
 %license COPYING
+%if %{with_sysusers}
+%{_sysusersdir}/systemtap-server.conf
+%endif
 
 
 %files devel -f systemtap.lang
 %{_bindir}/stap
 %{_bindir}/stap-prep
+%if %{with_python3}
+%{_bindir}/stap-profile-annotate
+%endif
 %{_bindir}/stap-report
 %dir %{_datadir}/systemtap
 %{_datadir}/systemtap/runtime
@@ -1085,6 +1152,9 @@ exit 0
 %doc README README.security AUTHORS NEWS 
 %{!?_licensedir:%global license %%doc}
 %license COPYING
+%if %{with_sysusers}
+%{_sysusersdir}/systemtap-runtime.conf
+%endif
 
 
 %files client -f systemtap.lang
@@ -1118,6 +1188,7 @@ exit 0
 
 %files initscript
 %if %{with_systemd}
+%{_presetdir}/42-systemtap.preset
 %{_unitdir}/systemtap.service
 %{_sbindir}/systemtap-service
 %else
@@ -1151,6 +1222,9 @@ exit 0
 %files testsuite
 %dir %{_datadir}/systemtap
 %{_datadir}/systemtap/testsuite
+%if %{with_sysusers}
+%{_sysusersdir}/systemtap-testsuite.conf
+%endif
 
 
 %if %{with_java}
@@ -1192,7 +1266,7 @@ exit 0
 %endif
 %endif
 
-%if %{with_python3}
+%if %{with_python3_probes}
 %files exporter
 %{_sysconfdir}/stap-exporter
 %{_sysconfdir}/sysconfig/stap-exporter
@@ -1210,6 +1284,18 @@ exit 0
 
 # PRERELEASE
 %changelog
+* Thu Nov 03 2022 Serhei Makarov <serhei@serhei.io> - 4.8-1
+- Upstream release, see wiki page below for detailed notes.
+  https://sourceware.org/systemtap/wiki/SystemTapReleases
+
+* Mon May 02 2022 Frank Ch. Eigler <fche@redhat.com> - 4.7-1
+- Upstream release, see wiki page below for detailed notes.
+  https://sourceware.org/systemtap/wiki/SystemTapReleases
+
+* Mon Nov 15 2021 Serhei Makarov <me@serhei.io> - 4.6-1
+- Upstream release, see wiki page below for detailed notes.
+  https://sourceware.org/systemtap/wiki/SystemTapReleases
+
 * Fri May 07 2021 Serhei Makarov <me@serhei.io> - 4.5-1
 - Upstream release.
 

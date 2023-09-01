@@ -1,3 +1,79 @@
+* What's new in version 4.8, 2022-11-03
+
+- DWARF-related probes (.function, .statement) now merge DWARF and
+  non-DWARF symbol-table based matches, rather than being either-or.
+
+- The python3 tapset was extended to support python3 3.9, 3.10, and 3.11.
+  See stapprobes(3stap) for further details on probing python functions.
+
+- A template cve band-aid script is now included, which demonstrates
+  how to use a new 'livepatch.stp' tapset to standardize activation,
+  interactive control, and monitoring of systemtap cve band-aids.
+
+- The kernel runtime now uses much less memory when the number of
+  "possible CPUs" are way more than the online ones. For example,
+  VMWare guests usually have 128 "possible CPUs" while fewer
+  CPUs are actually present or online in the guest system.
+
+- The memory allocation size is now irrelevant to the value of
+  NR_CPUS of the current kernel. It is only subject to the number
+  of "possible CPUs" or "online CPUs".
+
+- CPU hotplug is supported to the extent that there won't be any
+  kernel panics or memory corruptions.
+
+- The bpf backend's embedded-code assembler has been improved to
+  support more conventional assembly syntax with named opcodes. The
+  opcode names are based on the iovisor bpf-docs documentation at
+  https://github.com/iovisor/bpf-docs/blob/master/eBPF.md
+
+* What's new in version 4.7, 2022-05-02
+
+- SystemTap now supports an additional method to sign modules on
+  UEFI/SecureBoot systems.  In addition to the existing method of
+  using a trusted stap-server, the module can also be signed without
+  using a server by specifying the "stap --sign-module" option.  (Key
+  enrollment still requires a one-time reboot and BIOS conversation.)
+  https://sourceware.org/systemtap/wiki/SecureBoot
+
+- Includes new tool stap-profile-annotate, combining systemtap &
+  debuginfod to collect system-wide profiling statistics, and
+  produce annotated source files for all relevant programs/libraries.
+
+- target processes given with the -c/-x parameters are now always
+  added to the -d list for possible symbol/unwind data extraction,
+  for simplifying profiling invocations.  Consider --ldd.
+
+- The "subbuf" size for kernel-to-user bulk message passing is fixed
+  at the page size.  Number of such subbufs is affected by the
+  stap "-s" parameter and amount of free memory available.
+
+* What's new in version 4.6, 2021-11-15
+
+- SystemTap has added support for the 64-bit RISC-V architecture.
+
+- stap-prep now tries to download the main kernel debuginfo file from
+  a debuginfod server, if configured.
+
+- Updated syscall_any tapset mapping to include newer syscalls.
+
+- syscall_any tapset can be used by the bpf backend.
+
+- SystemTap now uses DynInst to perform a liveness analysis on
+  target variables and warn when a guru-mode modification to a variable
+  will have no effect. The liveness analysis is currently done on
+  x86_64, PowerPC, and AArch64.
+
+- The kernel-user relayfs transport again sorts messages into a total
+  time order across CPUs.  High output-volume scripts may need a
+  larger "-s BUF" parameter to reliably transfer.  "-b" bulk mode
+  is also available again as an alternative.
+
+- abort() tapset can be used by the bpf backend.
+
+- The bpf backend now supports foreach iteration in multi-key
+  associative arrays.
+
 * What's new in version 4.5, 2021-05-07
 
 - Java probing support has been updated to work with the latest

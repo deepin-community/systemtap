@@ -338,7 +338,7 @@ _stp_vsprint_memory(char * str, char * end, const char * ptr,
 	if (format == 's') {
 		if ((unsigned long)ptr < PAGE_SIZE)
 			ptr = "<NULL>";
-		len = strnlen(ptr, precision);
+		len = strnlen(ptr, clamp_t(size_t, precision, 0, STP_BUFFER_SIZE));                
 	}
 	else if (precision > 0)
 		len = precision;
@@ -410,7 +410,7 @@ _stp_vsprint_memory_size(const char * ptr, int width, int precision,
 	if (format == 's') {
 		if ((unsigned long)ptr < PAGE_SIZE)
 			ptr = "<NULL>";
-		len = strnlen(ptr, precision);
+		len = strnlen(ptr, clamp_t(size_t, precision, 0, STP_BUFFER_SIZE));
 	}
 	else if (precision > 0)
 		len = precision;
@@ -641,7 +641,7 @@ _stp_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
 
                     case 'X':
                             flags |= STP_LARGE;
-			    /* fallthru */
+			    fallthrough;
                     case 'x':
                             base = 16;
                             break;
@@ -649,7 +649,7 @@ _stp_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
                     case 'd':
                     case 'i':
                             flags |= STP_SIGN;
-			    /* fallthru */
+			    fallthrough;
                     case 'u':
                             break;
 
@@ -835,7 +835,7 @@ _stp_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
 
 		case 'X':
 			flags |= STP_LARGE;
-			/* fallthru */
+                        fallthrough;
 		case 'x':
 			base = 16;
 			break;
@@ -843,7 +843,7 @@ _stp_vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
 		case 'd':
 		case 'i':
 			flags |= STP_SIGN;
-			/* fallthru */
+                        fallthrough;
 		case 'u':
 			break;
 

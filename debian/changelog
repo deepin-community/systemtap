@@ -1,14 +1,53 @@
-systemtap (4.5.1-1+dde) UNRELEASED; urgency=medium
+systemtap (4.8-2) unstable; urgency=medium
 
-  * update
+  * Add d/patches/dtrace-deterministic-tmpfile.diff by Gioele Barabucci to
+    ensure dtrace produces reproducible object files. The patch has been merged
+    upstream already. Thanks Gioele! (Closes: #1032056)
+  * Add autopkgtest d/tests/dtrace-reproducible to verify that the above works
+    as advertised.
+  * Refresh d/patches.
 
- -- Emanuele Rocca <ema@debian.org>  Mon, 25 Jul 2022 15:49:17 +0800
+ -- Emanuele Rocca <ema@debian.org>  Tue, 28 Feb 2023 21:45:06 +0100
 
-systemtap (4.5.1-1+dde) unstable; urgency=medium
+systemtap (4.8-1) unstable; urgency=medium
 
-  * Add sunway support.
+  * New upstream release.
+  * Fix url in debian/watch.
+  * Add dependency on python3 for stap-profile-annotate.
+  * Update systemtap-doc.lintian-overrides to match lintian output with
+    brackets. Add a wrong-path-for-interpreter override for cve-2011-4127.stp
+    as it is only an example.
+  * Remove obsolete lintian override for setuid-binary usr/bin/staprun.
+  * Add lintian override for HTML files false positive: source-is-missing.
 
- -- Miao Changwei <miaochangwei@uniontech.com>  Fri, 29 Apr 2022 04:57:18 +0800
+ -- Emanuele Rocca <ema@debian.org>  Fri, 06 Jan 2023 20:25:17 +0100
+
+systemtap (4.7-1) unstable; urgency=medium
+
+  * New upstream version, fixes FTBFS with GCC-12. (Closes: #1013048)
+    See https://sourceware.org/git/?p=systemtap.git;a=commit;h=56c498d
+  * Ship new executable: stap-profile-annotate(1).
+  * Drop patch dtrace-predictable-tmp-file.patch, applied upstream.
+  * Update debian/patches/systemtap-ia64.patch.
+
+ -- Emanuele Rocca <ema@debian.org>  Sat, 18 Jun 2022 12:47:33 +0200
+
+systemtap (4.6-2) unstable; urgency=medium
+
+  * Add dtrace-predictable-tmp-file.patch to use hash-based scheme for
+    predictable file generation in dtrace. (Closes: #1006703)
+    Thanks dann frazier for the patch!
+
+ -- Emanuele Rocca <ema@debian.org>  Fri, 11 Mar 2022 17:29:24 +0100
+
+systemtap (4.6-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Refresh systemtap-ia64.patch.
+  * Set debhelper compatibility level to 13.
+  * Set Standards-Version to 4.6.0.
+
+ -- Emanuele Rocca <ema@debian.org>  Thu, 18 Nov 2021 16:18:30 +0100
 
 systemtap (4.5-2) unstable; urgency=medium
 

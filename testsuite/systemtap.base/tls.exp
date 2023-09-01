@@ -3,6 +3,10 @@ set stap_path $env(SYSTEMTAP_PATH)/stap
 
 # exp_internal 1
 
+# tls not supported on aarch64: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=97344
+set arch [exec uname -i]
+if {$arch eq "aarch64"} { untested $test; return }
+
 set so_flags "additional_flags=-shared"
 set so_flags "$so_flags additional_flags=-g"
 set so_flags "$so_flags additional_flags=-fPIC"
@@ -72,13 +76,19 @@ foreach runtime [get_runtime_list] {
     }
 
     set ok 0
+    set nodb 0
     spawn $stap_path --runtime=$runtime -g -c $x1_exepath $srcdir/$subdir/tls1.stp $so1_sopath IGNORE
     expect {
 	-timeout 180
+	-re {WARNING:.*No DWARF information found} { incr nodb }
 	-re {In Stap(()| increase_tls): (tls1=0x[23] tls2=0x[34]|tls=99)} { incr ok; exp_continue }
 	eof { }
     }
     catch {close}; catch {wait}
+    if {$nodb != 0} {
+	untested "$test_type (missing debuginfo)"
+	return
+    }
     if {$ok == 3} {
 	pass "$test_type local tls vars"
     } else {
@@ -104,30 +114,38 @@ foreach runtime [get_runtime_list] {
     # Check errno
 
     set ok 0
+    set nodb 0
     spawn $stap_path --runtime=$runtime  -e "probe process(\"$libc_path\").function(\"*stat*\").return { printf(\"errno=%d %s\\n\", @var(\"errno@errno.c\"),errno_str(@var(\"errno@errno.c\"))) }" -c "/usr/bin/ls /file/does/not/exist"
     expect {
 	-timeout 180
+	-re {Missing separate debuginfos} { incr nodb }
 	-re {errno=2 (ENOENT)} { incr ok; exp_continue }
 	eof { }
     }
     catch {close}; catch {wait}
     if {$ok >= 1} {
 	pass "$test_type errno"
+    } elseif {$nodb > 0} {
+	xfail "$test_type errno (no glibc debuginfo)"
     } else {
 	fail "$test_type errno ($ok/>=1)"
     }
 
     set ok 0
+    set nodb 0
     spawn $stap_path --runtime=$runtime -e "probe process(\"$errno_exepath\").function(\"main\").return {println (\"In Stap errno=\",@errno) }" -c "$errno_exepath"
 
     expect {
 	-timeout 180
+	-re {Missing separate debuginfos} { incr nodb }
 	-re {In Stap errno=2} { incr ok; exp_continue }
 	eof { }
     }
     catch {close}; catch {wait}
     if {$ok >= 1} {
 	pass "$test_type @errno"
+    } elseif {$nodb > 0} {
+	xfail "$test_type errno (no glibc debuginfo)"
     } else {
 	fail "$test_type @errno ($ok/>=1)"
     }

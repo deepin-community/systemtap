@@ -2,12 +2,12 @@
 .\"     Title: probe::tcp.recvmsg.return
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: May 2021
+.\"      Date: November 2022
 .\"    Manual: Networking Tapset
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::TCP\&.RECVMSG" "3stap" "May 2021" "SystemTap Tapset Reference" "Networking Tapset"
+.TH "PROBE::TCP\&.RECVMSG" "3stap" "November 2022" "SystemTap Tapset Reference" "Networking Tapset"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -36,21 +36,6 @@ tcp\&.recvmsg\&.return
 .fi
 .SH "VALUES"
 .PP
-\fIdaddr\fR
-.RS 4
-A string representing the destination IP address
-.RE
-.PP
-\fIsport\fR
-.RS 4
-TCP source port
-.RE
-.PP
-\fIsize\fR
-.RS 4
-Number of bytes received or error code if an error occurred\&.
-.RE
-.PP
 \fIname\fR
 .RS 4
 Name of this probe
@@ -69,6 +54,21 @@ TCP destination port
 \fIfamily\fR
 .RS 4
 IP address family
+.RE
+.PP
+\fIsport\fR
+.RS 4
+TCP source port
+.RE
+.PP
+\fIsize\fR
+.RS 4
+Number of bytes received or error code if an error occurred\&.
+.RE
+.PP
+\fIdaddr\fR
+.RS 4
+A string representing the destination IP address
 .RE
 .SH "CONTEXT"
 .PP

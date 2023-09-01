@@ -14,7 +14,7 @@
 #include <linux/percpu.h>
 #include "stp_helper_lock.h"
 
-static int _stp_allocated_net_memory = 0;
+static long _stp_allocated_net_memory = 0;
 /* Default, and should be "safe" from anywhere. */
 #define STP_ALLOC_FLAGS ((GFP_KERNEL | __GFP_NORETRY | __GFP_NOWARN) \
 			 & ~__GFP_WAIT)
@@ -45,7 +45,7 @@ static int _stp_allocated_net_memory = 0;
  * would be nice, but DEBUG_MEM is only for testing.
  */
 
-static int _stp_allocated_memory = 0;
+static long _stp_allocated_memory = 0;
 
 #ifdef DEBUG_MEM
 static STP_DEFINE_SPINLOCK(_stp_mem_lock);
@@ -459,7 +459,7 @@ static void *_stp_alloc_percpu(size_t size)
 
 #ifdef STP_MAXMEMORY
 	if ((_STP_MODULE_CORE_SIZE + _stp_allocated_memory
-	     + (size * num_online_cpus()))
+	     + (size * num_possible_cpus()))
 	    > (STP_MAXMEMORY * 1024)) {
 		return NULL;
 	}
@@ -477,12 +477,12 @@ static void *_stp_alloc_percpu(size_t size)
 			free_percpu(ret);
 			return NULL;
 		}
-	        _stp_allocated_memory += size * num_online_cpus();
+	        _stp_allocated_memory += size * num_possible_cpus();
 		_stp_mem_debug_percpu(m, ret, size);
 	}
 #else
 	if (likely(ret)) {
-	        _stp_allocated_memory += size * num_online_cpus();
+	        _stp_allocated_memory += size * num_possible_cpus();
 	}
 #endif
 	return ret;

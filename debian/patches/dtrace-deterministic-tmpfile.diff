@@ -1,0 +1,113 @@
+From 05c8fa6a54b78e87c2513f52641d1bba10852994 Mon Sep 17 00:00:00 2001
+From: Gioele Barabucci <gioele@svario.it>
+Date: Mon, 27 Feb 2023 12:56:52 +0100
+Subject: [PATCH] dtrace: Use deterministic temp file creation for all temp
+ files
+
+`dtrace -G -C` creates temporary files with random filenames. The name
+of these temporary files gets embedded in the ELF `.symtab` of the final
+object files, making them always slightly different.
+
+This behavior makes all packages that use `dtrace`-produced object files
+inherently non reproducible.
+
+To fix this issue all temporary files are now created using
+the same deterministic procedure currently used only for the
+temporary "c." files.
+
+Fixes: https://bugs.debian.org/1032055
+Fixes: https://bugs.debian.org/1032056
+Signed-off-by: Gioele Barabucci <gioele@svario.it>
+---
+ dtrace.in | 50 +++++++++++++++++++++++++++-----------------------
+ 1 file changed, 27 insertions(+), 23 deletions(-)
+
+Index: systemtap/dtrace.in
+===================================================================
+--- systemtap.orig/dtrace.in
++++ systemtap/dtrace.in
+@@ -27,7 +27,6 @@ import time
+ import atexit
+ from shlex import split
+ from subprocess import call
+-from tempfile import mkstemp
+ try:
+     from pyparsing import alphas, cStyleComment, delimitedList, Group, \
+         Keyword, lineno, Literal, nestedExpr, nums, oneOf, OneOrMore, \
+@@ -278,6 +277,28 @@ class _ReProvider(_HeaderCreator):
+         hdr.close()
+ 
+ 
++def mktemp_determ(sources, suffix):
++    # for reproducible-builds purposes, use a predictable tmpfile path
++    sha = hashlib.sha256()
++    for source in sources:
++        sha.update(source.encode('utf-8'))
++    fname = ".dtrace-temp." + sha.hexdigest()[:8] + suffix
++    tries = 0
++    while True:
++        tries += 1
++        if tries > 100: # if file exists due to previous crash or whatever
++            raise Exception("cannot create temporary file \""+fname+"\"")
++        try:
++            wxmode = 'x' if sys.version_info > (3,0) else 'wx'
++            fdesc = open(fname, mode=wxmode)
++            break
++        except FileExistsError:
++            time.sleep(0.1) # vague estimate of elapsed time for concurrent identical gcc job
++            pass # Try again
++
++    return fdesc, fname
++
++
+ def usage():
+     print("Usage " + sys.argv[0] + " [--help] [-h | -G] [-C [-I<Path>]] -s File.d [-o <File>]")
+ 
+@@ -360,7 +381,7 @@ def main():
+         return 1
+ 
+     if s_filename != "" and use_cpp:
+-        (ignore, fname) = mkstemp(suffix=".d")
++        (ignore, fname) = mktemp_determ(["use_cpp", s_filename], suffix=".d")
+         cpp = os.environ.get("CPP", "cpp")
+         retcode = call(split(cpp) + includes + defines + [s_filename, '-o', fname])
+         if retcode != 0:
+@@ -399,7 +420,7 @@ def main():
+             providers = _PypProvider()
+         else:
+             providers = _ReProvider()
+-        (ignore, fname) = mkstemp(suffix=".h")
++        (fdesc, fname) = mktemp_determ(["build_source", s_filename], suffix=".h")
+         while True:
+             try:
+                 providers.probe_write(s_filename, fname)
+@@ -413,26 +434,9 @@ def main():
+         else:
+             print("header: " + fname)
+ 
+-        # for reproducible-builds purposes, use a predictable tmpfile path
+-        sha = hashlib.sha256()
+-        sha.update(s_filename.encode('utf-8'))
+-        sha.update(filename.encode('utf-8'))
+-        fname = ".dtrace-temp." + sha.hexdigest()[:8] + ".c"
+-        tries = 0
+-        while True:
+-            tries += 1
+-            if tries > 100: # if file exists due to previous crash or whatever
+-                print("cannot create temporary file \""+fname+"\"")
+-                return 1
+-            try:
+-                wxmode = 'x' if sys.version_info > (3,0) else 'wx'
+-                fdesc = open(fname, mode=wxmode)
+-                if not keep_temps:
+-                   atexit.register(os.remove, fname) # delete generated source at exit, even if error
+-                break
+-            except:
+-                time.sleep(0.1) # vague estimate of elapsed time for concurrent identical gcc job
+-                pass # Try again
++        (fdesc, fname) = mktemp_determ(["build_source", s_filename, filename], suffix=".c")
++        if not keep_temps:
++            atexit.register(os.remove, fname) # delete generated source at exit, even if error
+         providers.semaphore_write(fdesc)
+         fdesc.close()
+         cc1 = os.environ.get("CC", "gcc")

@@ -120,7 +120,13 @@ make_any_make_cmd(systemtap_session& s, const string& dir, const string& target)
       "CONFIG_DEBUG_INFO_BTF_MODULES=",
       
       // RHBZ1321628: suppress stack validation; expected to be temporary
-      "CONFIG_STACK_VALIDATION=",
+      // "CONFIG_STACK_VALIDATION=",
+      
+      // PR28140 ... as of kernel 5.14-rc*, this is actively
+      // dangerous, because it skips the full objtool processing
+      // chain, and the resulting tracepoint call sites in the ko are
+      // not properly instrumented.  See also Linux commit
+      // ab3257042c2.
     };
 
   // PR10280: suppress symbol versioning to restrict to exact kernel version
@@ -364,7 +370,7 @@ compile_pass (systemtap_session& s)
   output_exportconf(s, o2, "synchronize_sched", "STAPCONF_SYNCHRONIZE_SCHED");
   output_autoconf(s, o, cs, "autoconf-task-uid.c", "STAPCONF_TASK_UID", NULL);
   output_autoconf(s, o, cs, "autoconf-from_kuid_munged.c", "STAPCONF_FROM_KUID_MUNGED", NULL);
-  output_exportconf(s, o2, "get_mm_exe_file", "STAPCONF_GET_MM_EXE_FILE");
+  output_exportconf(s, o2, "get_mm_exe_file", "STAPCONF_GET_MM_EXE_FILE_EXPORTED");
   output_dual_exportconf(s, o2, "alloc_vm_area", "free_vm_area", "STAPCONF_VM_AREA");
   output_autoconf(s, o, cs, "autoconf-procfs-owner.c", "STAPCONF_PROCFS_OWNER", NULL);
   output_autoconf(s, o, cs, "autoconf-alloc-percpu-align.c", "STAPCONF_ALLOC_PERCPU_ALIGN", NULL);
@@ -383,7 +389,8 @@ compile_pass (systemtap_session& s)
   output_exportconf(s, o2, "cpu_khz", "STAPCONF_CPU_KHZ");
   output_exportconf(s, o2, "__module_text_address", "STAPCONF_MODULE_TEXT_ADDRESS");
   output_exportconf(s, o2, "add_timer_on", "STAPCONF_ADD_TIMER_ON");
-
+  output_autoconf(s, o, cs, "autoconf-514-panic.c", "STAPCONF_514_PANIC", NULL);
+  
   output_dual_exportconf(s, o2, "probe_kernel_read", "probe_kernel_write", "STAPCONF_PROBE_KERNEL");
   output_autoconf(s, o, cs, "autoconf-hw_breakpoint_context.c",
 		  "STAPCONF_HW_BREAKPOINT_CONTEXT", NULL);
@@ -423,6 +430,7 @@ compile_pass (systemtap_session& s)
   output_exportconf(s, o2, "proc_create_data", "STAPCONF_PROC_CREATE_DATA");
   output_autoconf(s, o, cs, "autoconf-proc_ops.c", "STAPCONF_PROC_OPS", NULL);
   output_exportconf(s, o2, "PDE_DATA", "STAPCONF_PDE_DATA");
+  output_autoconf(s, o, cs, "autoconf-pde_data.c", "STAPCONF_PDE_DATA2", NULL);
   output_autoconf(s, o, cs, "autoconf-module-sect-attrs.c", "STAPCONF_MODULE_SECT_ATTRS", NULL);
   output_autoconf(s, o, cs, "autoconf-kernel_read-new-args.c", "STAPCONF_KERNEL_READ_NEW_ARGS", NULL);
   output_autoconf(s, o, cs, "autoconf-utrace-via-tracepoints.c", "STAPCONF_UTRACE_VIA_TRACEPOINTS", NULL);
@@ -520,6 +528,11 @@ compile_pass (systemtap_session& s)
 		  "STAPCONF_ATOMIC_FETCH_ADD_UNLESS", NULL);
   output_autoconf(s, o, cs, "autoconf-lockdown-debugfs.c", "STAPCONF_LOCKDOWN_DEBUGFS", NULL);
   output_autoconf(s, o, cs, "autoconf-lockdown-kernel.c", "STAPCONF_LOCKDOWN_KERNEL", NULL);
+  output_autoconf(s, o, cs, "autoconf-hlist_add_tail_rcu.c",
+		  "STAPCONF_HLIST_ADD_TAIL_RCU", NULL);
+  output_autoconf(s, o, cs, "autoconf-files_lookup_fd_raw.c",
+                  "STAPCONF_FILES_LOOKUP_FD_RAW", NULL);
+  output_autoconf(s, o, cs, "autoconf-task-state.c", "STAPCONF_TASK_STATE", NULL);
   
   // used by runtime/linux/netfilter.c
   output_exportconf(s, o2, "nf_register_hook", "STAPCONF_NF_REGISTER_HOOK");
@@ -562,7 +575,11 @@ compile_pass (systemtap_session& s)
   o << "EXTRA_CFLAGS += -freorder-blocks" << endl; // improve on -Os
 
   // Generate eh_frame for self-backtracing
-  o << "EXTRA_CFLAGS += -fasynchronous-unwind-tables" << endl;
+  // FIXME Work around the issue with riscv kernel modules not being
+  // loadable with asynchronous unwind tables due to R_RISCV_32_PCREL
+  // relocations.
+  if (s.architecture != "riscv")
+    o << "EXTRA_CFLAGS += -fasynchronous-unwind-tables" << endl;
 
   // We used to allow the user to override default optimization when so
   // requested by adding a -O[0123s] so they could determine the
@@ -585,6 +602,12 @@ compile_pass (systemtap_session& s)
   // Accept extra diagnostic-suppression pragmas etc.
   o << "EXTRA_CFLAGS += -Wno-pragmas" << endl;
 
+  // Suppress gcc12 diagnostic bug in kernel-devel for 5.16ish
+  o << "EXTRA_CFLAGS += -Wno-infinite-recursion" << endl;
+
+  // Suppress gcc12 diagnostic about STAP_KPROBE_PROBE_STR_* null checks
+  o << "EXTRA_CFLAGS += -Wno-address" << endl;
+  
   // PR25845: Recent gcc (seen on 9.3.1) warns fairly common 32-bit pointer-conversions:
   o << "EXTRA_CFLAGS += $(call cc-option,-Wno-pointer-to-int-cast)" << endl;
   o << "EXTRA_CFLAGS += $(call cc-option,-Wno-int-to-pointer-cast)" << endl;
@@ -1026,6 +1049,8 @@ make_tracequeries(systemtap_session& s, const map<string,string>& contents)
   omf << "CONFIG_MODULE_SIG := n" << endl;
   // PR23488: need to override this kconfig, else we get no useful struct decls
   omf << "CONFIG_DEBUG_INFO_REDUCED := " << endl;
+  // objtool is slow and uses a lot of memory, skip it since these modules aren't loaded
+  omf << "CONFIG_STACK_VALIDATION := " << endl;
   // PR18389: disable GCC's Identical Code Folding, since the stubs may look identical
   omf << "EXTRA_CFLAGS += $(call cc-option,-fno-ipa-icf)" << endl;
 
@@ -1105,6 +1130,9 @@ make_typequery_kmod(systemtap_session& s, const vector<string>& headers, string&
 
   // PR23488: need to override this kconfig, else we get no useful struct decls
   omf << "CONFIG_DEBUG_INFO_REDUCED := " << endl;
+
+  // objtool is slow and uses a lot of memory, skip it since these modules aren't loaded
+  omf << "CONFIG_STACK_VALIDATION := " << endl;
   
   // NB: We use -include instead of #include because that gives us more power.
   // Using #include searches relative to the source's path, which in this case

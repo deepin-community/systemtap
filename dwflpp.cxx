@@ -71,6 +71,15 @@ using namespace __gnu_cxx;
 
 static string TOK_KERNEL("kernel");
 
+// Function take the DW_AT_data_bit_offset and produces
+// what would be expected for the DW_AT_data_member_location.
+// This assume the containing type has natural alignment.
+static Dwarf_Word
+data_bit_to_byte_offset(Dwarf_Word byte_size, Dwarf_Word bit_offset)
+{
+	return  (((bit_offset/8) / byte_size) * byte_size);
+}
+
 
 dwflpp::dwflpp(systemtap_session & session, const string& name, bool kernel_p, bool debuginfo_needed):
   sess(session), module(NULL), module_bias(0), mod_info(NULL),
@@ -115,6 +124,7 @@ dwflpp::~dwflpp()
   delete_map(cu_lines_cache);
 
   delete_map(cu_entry_pc_cache);
+  delete_map(dw_at_member_location_cache);
 
   if (dwfl)
     dwfl_end(dwfl);
@@ -2772,7 +2782,7 @@ dwflpp::get_locals_die(Dwarf_Die& die, set<string>& locals)
 
 int
 dwflpp::dwarf_get_enum (Dwarf_Die *scopes, int nscopes,
-                   const char *name, Dwarf_Die *result)
+                   const char *name, Dwarf_Die *result, Dwarf_Die *enum_type)
 {
   // subprogram {<decls> enumeration_type {enumerator,...}}
   // lexical block {<decls> enumeration_type {enumerator,...}}
@@ -2781,7 +2791,7 @@ dwflpp::dwarf_get_enum (Dwarf_Die *scopes, int nscopes,
     if (dwarf_haschildren (&scopes[out]) && dwarf_child (&scopes[out], result) == 0)
       do
         {
-          Dwarf_Die save_result = *result;
+          *enum_type = *result;
           if (dwarf_tag (result) == DW_TAG_enumerator
               || (dwarf_tag (result) == DW_TAG_enumeration_type
                   && dwarf_child (result, result) == 0))
@@ -2791,11 +2801,16 @@ dwflpp::dwarf_get_enum (Dwarf_Die *scopes, int nscopes,
                   {
                     const char *diename = dwarf_diename (result);
                     if (diename != NULL && !strcmp (name, diename))
-                      return out;
+                      {
+                        Dwarf_Attribute attr_mem;
+                        dwarf_formref_die (dwarf_attr_integrate (enum_type, DW_AT_type, &attr_mem),
+                                                 enum_type);
+                        return out;
+                      }
                   }
               }
             while (dwarf_siblingof (result, result) == 0);
-          *result = save_result;
+          *result = *enum_type;
         }
       while (dwarf_siblingof (result, result) == 0);
 
@@ -2809,6 +2824,7 @@ dwflpp::find_variable_and_frame_base (vector<Dwarf_Die>& scopes,
                                       string const & local,
                                       const target_symbol *e,
                                       Dwarf_Die *vardie,
+                                      Dwarf_Die *typedie,
                                       Dwarf_Attribute *fb_attr_mem,
                                       Dwarf_Die *funcdie)
 {
@@ -2822,7 +2838,8 @@ dwflpp::find_variable_and_frame_base (vector<Dwarf_Die>& scopes,
                                            0, NULL, 0, 0,
                                            vardie);
   if (declaring_scope < 0)
-      if ((declaring_scope = dwarf_get_enum (&scopes[0], scopes.size(), local.c_str(), vardie)) < 0)
+      if ((declaring_scope = dwarf_get_enum (&scopes[0], scopes.size(),
+          local.c_str(), vardie, typedie)) < 0)
         {
           // XXX: instead: add suggested locals and let a caller throw a single error
           set<string> locals;
@@ -2875,7 +2892,7 @@ dwflpp::find_variable_and_frame_base (vector<Dwarf_Die>& scopes,
 	    // version is recent enough to not need this workaround if
 	    // we would see an imported unit.
 	    if (dwarf_tag (vardie) == DW_TAG_variable
-		&& strcmp (dwarf_diename (vardie), local.c_str ()) == 0
+		&& strcmp (dwarf_diename (vardie) ?: "<unknown>", local.c_str ()) == 0
 		&& (dwarf_attr_integrate (vardie, DW_AT_external, &attr_mem)
 		    != NULL)
 		&& ((dwarf_attr_integrate (vardie, DW_AT_const_value, &attr_mem)
@@ -3426,7 +3443,8 @@ dwflpp::find_struct_member(const target_symbol::component& c,
           else if (tag == DW_TAG_enumeration_type)
             {
               Dwarf_Die enum_item;
-              if (dwarf_get_enum (&die, 1, c.member.c_str(), &enum_item) >= 0
+              Dwarf_Die enum_type;
+              if (dwarf_get_enum (&die, 1, c.member.c_str(), &enum_item, &enum_type) >= 0
                   && dwarf_attr_integrate (&enum_item, DW_AT_const_value, &attr))
                 {
                   /* We have a matching enum so use its die and attr */
@@ -3463,6 +3481,43 @@ success:
     {
       dies.insert(dies.begin(), die);
       locs.insert(locs.begin(), attr);
+    }
+  else if (dwarf_attr_integrate (&die, DW_AT_data_bit_offset, &attr))
+    {
+      /* dwarf_getlocation_addr doesn't understand DW_AT_data_bit offset,
+       * so generate an equivalent DW_AT_data_member_location attr.
+       */
+      Dwarf_Attribute attr_mem;
+      Dwarf_Die typedie;
+      Dwarf_Word bit_offset, byte_size, member_location;
+      if (dwarf_attr_integrate (&die, DW_AT_data_bit_offset, &attr_mem) == NULL
+	  || dwarf_formudata (&attr_mem, &bit_offset) != 0
+          || dwarf_attr_die (&die, DW_AT_type, &typedie) == NULL
+	  || dwarf_aggregate_size (&typedie, &byte_size) != 0)
+	  throw SEMANTIC_ERROR (_F("cannot get bit field parameters: %s",
+				       dwarf_errmsg(-1)), c.tok);
+
+      member_location = data_bit_to_byte_offset(byte_size, bit_offset);
+      if (sess.verbose > 2)
+	clog << _F("member_location=%" PRIu64 ", bit_offset=%" PRIu64 ", byte_size=%" PRIu64 "\n",
+		 member_location, bit_offset, byte_size);
+      unsigned char *loc;
+      if (dw_at_member_location_cache.find(member_location) != dw_at_member_location_cache.end()) {
+	      loc = dw_at_member_location_cache[member_location];
+      }else {
+	      loc = new unsigned char[16];
+	      dw_at_member_location_cache[member_location] = loc;
+	      // write_uleb128 modifies loc, so do after the cache assignment
+	      write_uleb128(loc, member_location);
+      }
+
+      Dwarf_Attribute data_member_location = {
+	      DW_AT_data_member_location, DW_FORM_udata,
+	      loc, attr.cu
+      };
+
+      dies.insert(dies.begin(), die);
+      locs.insert(locs.begin(), data_member_location);
     }
 
   /* Union members don't usually have a location,
@@ -3661,16 +3716,37 @@ get_bitfield (const target_symbol *e, Dwarf_Die *die, Dwarf_Word byte_size,
               Dwarf_Word *bit_offset, Dwarf_Word *bit_size)
 {
   Dwarf_Attribute attr_mem;
-  if (dwarf_attr_integrate (die, DW_AT_bit_offset, &attr_mem) == NULL
+
+  if (dwarf_hasattr_integrate (die, DW_AT_bit_offset)) {
+    if (dwarf_attr_integrate (die, DW_AT_bit_offset, &attr_mem) == NULL
+        || dwarf_formudata (&attr_mem, bit_offset) != 0
+        || dwarf_attr_integrate (die, DW_AT_bit_size, &attr_mem) == NULL
+        || dwarf_formudata (&attr_mem, bit_size) != 0)
+      throw SEMANTIC_ERROR (_F("cannot get bit field parameters: %s",
+			       dwarf_errmsg(-1)), e->tok);
+
+    /* Convert the big-bit-endian numbers from Dwarf to little-endian.
+       This means we can avoid having to propagate byte_size further.  */
+    *bit_offset = byte_size * 8 - *bit_offset - *bit_size;
+  } else {
+    /* must be a DW_AT_data_bit_offset */
+    if (dwarf_attr_integrate (die, DW_AT_data_bit_offset, &attr_mem) == NULL
       || dwarf_formudata (&attr_mem, bit_offset) != 0
       || dwarf_attr_integrate (die, DW_AT_bit_size, &attr_mem) == NULL
       || dwarf_formudata (&attr_mem, bit_size) != 0)
     throw SEMANTIC_ERROR (_F("cannot get bit field parameters: %s",
 			  dwarf_errmsg(-1)), e->tok);
 
-  /* Convert the big-bit-endian numbers from Dwarf to little-endian.
-     This means we can avoid having to propagate byte_size further.  */
-  *bit_offset = byte_size * 8 - *bit_offset - *bit_size;
+    /* Convert the bit_offset from start of struct to start of field. */
+    Dwarf_Word member_location = data_bit_to_byte_offset(byte_size, *bit_offset);
+    *bit_offset = *bit_offset - member_location;
+#if __BYTE_ORDER == __BIG_ENDIAN
+    /* Convert the big-bit-endian bit offset to little-endian
+       suitable for shifts and masking.  */
+    *bit_offset = byte_size * 8 - *bit_offset - *bit_size;
+#endif
+
+  }
 }
 
 void
@@ -3845,8 +3921,11 @@ dwflpp::translate_final_fetch_or_store (location_context &ctx,
   const target_symbol *e = ctx.e;
 
   if (dwarf_tag (vardie) == DW_TAG_enumerator)
-    /* translate_location has already handled the enum constant */
-    return;
+    {
+      /* Set the type to the enumeration_type discovered by dwarf_get_enum */
+      *typedie = *start_typedie;
+      return;
+    }
 
   /* First boil away any qualifiers associated with the type DIE of
      the final location to be accessed.  */
@@ -3986,7 +4065,8 @@ dwflpp::translate_final_fetch_or_store (location_context &ctx,
 
         translate_base_ref (ctx, byte_size, signed_p, lvalue);
 
-	if (dwarf_hasattr_integrate (vardie, DW_AT_bit_offset))
+	if (dwarf_hasattr_integrate (vardie, DW_AT_bit_offset)
+	    || dwarf_hasattr_integrate (vardie, DW_AT_data_bit_offset))
 	  {
 	    Dwarf_Word bit_offset = 0;
 	    Dwarf_Word bit_size = 0;
@@ -4094,8 +4174,9 @@ dwflpp::literal_stmt_for_local (location_context &ctx,
   // needs to remain valid until express_as_string() has finished with it.
   Dwarf_Op addr_loc;
 
+  Dwarf_Die typedie;
   fb_attr = find_variable_and_frame_base (scopes, ctx.pc, local, e,
-                                          &vardie, &fb_attr_mem,
+                                          &vardie, &typedie, &fb_attr_mem,
                                           &funcdie);
 
   if (sess.verbose>2)
@@ -4141,7 +4222,6 @@ dwflpp::literal_stmt_for_local (location_context &ctx,
 
   /* Translate the ->bar->baz[NN] parts. */
 
-  Dwarf_Die typedie;
   if (dwarf_attr_die (&vardie, DW_AT_type, &typedie) == NULL
       && dwarf_tag (&vardie) != DW_TAG_enumerator)
     {
@@ -4218,7 +4298,7 @@ dwflpp::type_die_for_local (vector<Dwarf_Die>& scopes,
   Dwarf_Die vardie, funcdie;
   Dwarf_Attribute attr_mem;
 
-  find_variable_and_frame_base (scopes, pc, local, e, &vardie, &attr_mem, &funcdie);
+  find_variable_and_frame_base (scopes, pc, local, e, &vardie, typedie, &attr_mem, &funcdie);
 
   if (dwarf_attr_die (&vardie, DW_AT_type, typedie) == NULL)
     throw SEMANTIC_ERROR(_F("failed to retrieve type attribute for '%s' [man error::dwarf]", local.c_str()), e->tok);

@@ -149,6 +149,7 @@ static int _stp_vma_mmap_cb(struct stap_task_finder_target *tgt,
 {
 	int i, res;
 	struct _stp_module *module = NULL;
+	const char *ori_path = NULL;
 	const char *name = ((dentry != NULL) ? (char *)dentry->d_name.name
 			    : NULL);
         
@@ -167,7 +168,8 @@ static int _stp_vma_mmap_cb(struct stap_task_finder_target *tgt,
         // We register whether or not we know the module,
 	// so we can later lookup the name given an address for this task.
 	if (path != NULL &&
-	    stap_find_vma_map_info(tsk, addr, NULL, NULL, NULL, NULL, NULL) != 0) {
+	    (stap_find_vma_map_info(tsk->group_leader, addr, NULL, NULL, NULL, &ori_path, NULL) != 0 ||
+	     strcmp(ori_path ?: "", path) != 0)) {
 		for (i = 0; i < _stp_num_modules; i++) {
 			// PR20433: papering over possibility of NULL pointers
 			if (strcmp(path ?: "", _stp_modules[i]->path ?: "") == 0)
@@ -185,18 +187,19 @@ static int _stp_vma_mmap_cb(struct stap_task_finder_target *tgt,
 							    module,
 							    &vm_start, &vm_end,
 							    NULL);
-			  if (res == -ESRCH || vm_start + offset == addr)
+			  if (res == -ESRCH)
 			    res = stap_add_vma_map_info(tsk->group_leader,
-						        addr, addr + length,
-						        offset, path, module);
-			  else if (res == 0 && vm_end + 1 == addr)
-			    res = stap_extend_vma_map_info(tsk->group_leader,
-							   vm_start,
-							   addr + length);
+							addr, addr + length,
+							0, path, module);
+			  else
+			    res = stap_add_vma_map_info(tsk->group_leader,
+							addr, addr + length,
+							addr - vm_start, path, module);
+
 			  /* VMA entries are allocated dynamically, this is fine,
 			   * since we are in a task_finder callback, which is in
 			   * user context. */
-			  if (res != 0) {
+			  if (res != 0 && res != -EEXIST) {
 				_stp_error ("Couldn't register module '%s' for pid %d (%d)\n", _stp_modules[i]->path, tsk->group_leader->pid, res);
 			  }
 			  return 0;

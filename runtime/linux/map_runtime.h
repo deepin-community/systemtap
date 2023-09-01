@@ -20,7 +20,7 @@ struct pmap {
 	int bit_shift;	/* scale factor for integer arithmetic */
 	int stat_ops;	/* related statistical operators */
 	MAP agg;	/* aggregation map */
-	MAP map[];	/* per-cpu maps */
+	MAP *map;	/* per-cpu maps */
 };
 
 static inline MAP _stp_pmap_get_agg(PMAP p)
@@ -35,16 +35,12 @@ static inline void _stp_pmap_set_agg(PMAP p, MAP agg)
 
 static inline MAP _stp_pmap_get_map(PMAP p, unsigned cpu)
 {
-	if (cpu >= NR_CPUS)
-		cpu = 0;
-	return p->map[cpu];
+	return *per_cpu_ptr(p->map, cpu);
 }
 
 static inline void _stp_pmap_set_map(PMAP p, MAP m, unsigned cpu)
 {
-	if (cpu >= NR_CPUS)
-		cpu = 0;
-	p->map[cpu] = m;
+	*per_cpu_ptr(p->map, cpu) = m;
 }
 
 
@@ -72,10 +68,18 @@ static void _stp_pmap_del(PMAP pmap)
 	if (pmap == NULL)
 		return;
 
+       /* NB We cannot use the for_each_online_cpu() here since online
+        * CPUs may get changed on-the-fly through the CPU hotplug feature
+        * of the kernel. We only allocated the context structs on original
+        * online CPUs when _stp_pmap_new() was called.
+	*/
 	for_each_possible_cpu(i) {
 		MAP m = _stp_pmap_get_map (pmap, i);
-		_stp_map_del(m);
+		if (likely(m))
+			_stp_map_del(m);
 	}
+
+	_stp_free_percpu (pmap->map);
 
 	/* free agg map elements */
 	_stp_map_del(_stp_pmap_get_agg(pmap));
@@ -158,15 +162,30 @@ _stp_pmap_new(unsigned max_entries, int wrap, int node_size)
 	int i;
 	MAP m;
 
-	PMAP pmap = _stp_map_vzalloc(sizeof(struct pmap)
-				     + NR_CPUS * sizeof(MAP), -1);
-	if (pmap == NULL)
+	PMAP pmap = _stp_map_vzalloc(sizeof(struct pmap), -1);
+	if (unlikely(pmap == NULL))
 		return NULL;
 
+	pmap->map = _stp_alloc_percpu (sizeof(MAP));
+	if (unlikely(pmap->map == NULL)) {
+		_stp_vfree(pmap);
+		return NULL;
+	}
+
 	/* Allocate the per-cpu maps.  */
-	for_each_possible_cpu(i) {
+
+       /* We don't use for_each_possible_cpu() here since the number of possible
+        * CPUs may be very large even though there are many fewere online CPUs.
+        * For example, VMWare guests usually have 128 possible CPUs while only
+        * have a few online CPUs. Once the context structs were
+        * allocated for online CPUs at this point, we will discard any context
+        * fetching operations on any future online CPUs dynamically added
+        * through the kernel's CPU hotplug feature. Memory allocations of the
+        * context structs can only happen right here.
+        */
+	for_each_online_cpu(i) {
 		m = _stp_map_new(max_entries, wrap, node_size, i);
-		if (m == NULL)
+		if (unlikely(m == NULL))
 			goto err1;
                 _stp_pmap_set_map(pmap, m, i);
 	}
@@ -182,8 +201,10 @@ _stp_pmap_new(unsigned max_entries, int wrap, int node_size)
 err1:
 	for_each_possible_cpu(i) {
 		m = _stp_pmap_get_map (pmap, i);
-		_stp_map_del(m);
+		if (likely(m))
+			_stp_map_del(m);
 	}
+	_stp_free_percpu (pmap->map);
 	_stp_vfree(pmap);
 	return NULL;
 }

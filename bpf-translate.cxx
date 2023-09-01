@@ -1,5 +1,5 @@
 // bpf translation pass
-// Copyright (C) 2016-2020 Red Hat Inc.
+// Copyright (C) 2016-2022 Red Hat Inc.
 //
 // This file is part of systemtap, and is free software.  You can
 // redistribute it and/or modify it under the terms of the GNU General
@@ -269,7 +269,15 @@ struct bpf_unparser : public throwing_visitor
                            const token *tok = NULL);
 
   // Used for the embedded-code assembler:
+  opcode parse_opcode_tentative (const asm_stmt &stmt, const std::string &str,
+                                 /*OUT*/bool &numeric_opcode);
+  bool parse_imm_optional (const asm_stmt &stmt, const std::string &str,
+                           /*OUT*/int64_t &val);
   int64_t parse_imm (const asm_stmt &stmt, const std::string &str);
+  void parse_reg_offset (const asm_stmt &stmt, const std::string &str,
+                         /*OUT*/std::string &reg, /*OUT*/int64_t &off);
+  void parse_asm_opcode (const std::vector<std::string> &args,
+                         /*OUT*/asm_stmt &stmt);
   size_t parse_asm_stmt (embeddedcode *s, size_t start,
                            /*OUT*/asm_stmt &stmt);
   value *emit_asm_arg(const asm_stmt &stmt, const std::string &arg,
@@ -410,6 +418,7 @@ bpf_unparser::emit_jmp(block *b)
 {
   // Begin by hoping that we can simply place the destination as fallthru.
   // If this assumption doesn't hold, it'll be fixed by reorder_blocks.
+  assert(in_block());
   block *this_block = this_ins.get_block ();
   this_block->fallthru = new edge(this_block, b);
   clear_block ();
@@ -788,26 +797,41 @@ bpf_unparser::emit_store(expression *e, value *val)
    reserve stack memory, allocate virtual registers or signal errors.
 
    The assembler syntax will probably take a couple of attempts to get
-   just right. This attempt keeps things as close as possible to the
+   just right. The first attempt keeps things as close as possible to the
    first embedded-code assembler, with a few more features and a
-   disgustingly lenient parser that allows things like
+   disgustingly lenient parser that allows* things like
      $ this is        all one "**identifier**" believe-it!-or-not
+
+   (* Asterisk: except in the first opcode / operator keyword.)
 
    Ahh for the days of 1960s FORTRAN.
 
-   ??? It might make more sense to implement an assembler based on
-   the syntax used in official eBPF subsystem docs. */
+   PR29307: The second attempt adds support for the assembler syntax
+   from iovisor's docs
+   i.e. https://github.com/iovisor/bpf-docs/blob/master/eBPF.md
+
+   Comma after opcode now optional, semicolons can be replaced with
+   newline.
+
+   I also considered the syntax from
+   kernel Documentation/networking/filter.rst or bpfc(8),
+   also implemented in kernel tools/bpf/bpf_exp.y,
+   but the addressing-mode syntax seems a bit too baroque to bother
+   for the time being.
+
+   */
 
 /* Supported assembly statement types include:
 
-   <stmt> ::= label, <dest=label>;
-   <stmt> ::= alloc, <dest=reg>, <imm=imm> [, align|noalign];
-   <stmt> ::= call, <dest=optreg>, <param[0]=function name>, <param[1]=arg>, ...;
-   <stmt> ::= jump_to_catch, <param[0]=error message>; 
-   <stmt> ::= register_error, <param[0]=error message>; 
+   <stmt> ::= label <dest=label>
+   <stmt> ::= <dest=label>:
+   <stmt> ::= alloc <dest=reg>, <imm=imm> [, align|noalign];
+   <stmt> ::= call <dest=optreg>, <param[0]=function name>, <param[1]=arg>, ...;
+   <stmt> ::= jump_to_catch <param[0]=error message>;
+   <stmt> ::= register_error <param[0]=error message>;
    <stmt> ::= terminate;
-   <stmt> ::= <code=integer opcode>, <dest=reg>, <src1=reg>,
-              <off/jmp_target=off>, <imm=imm>;
+   <stmt> ::= <code=integer or symbolic opcode>
+              <dest=reg>, [<src1=reg>,] [<off/jmp_target=off>,] [<imm=imm>];
 
    Supported argument types include:
 
@@ -819,6 +843,13 @@ bpf_unparser::emit_store(expression *e, value *val)
    <off>    ::= <imm> | <jump label>
 
 */
+
+/* TODO PR29307 Suggested further improvements for the assembler syntax:
+
+   1. dest argument of call is optional
+   2. jump_to_catch and register_error error msg support formats
+
+ */
 
 // #define BPF_ASM_DEBUG
 
@@ -851,7 +882,12 @@ operator << (std::ostream& o, const asm_stmt& stmt)
     o << "label, " << stmt.dest << ";";
   else if (stmt.kind == "opcode")
     {
-      o << std::hex << stmt.code << ", "
+      o << std::hex << stmt.code;
+      // TODO std::hex is sticky? need to verify
+      std::string opcode_name(bpf_opcode_name(stmt.code));
+      if (opcode_name != "unknown")
+        o << "(" << opcode_name << ")";
+      o << ", "
         << stmt.dest << ", "
         << stmt.src1 << ", ";
       if (stmt.off != 0 || stmt.jmp_target == "")
@@ -901,10 +937,28 @@ is_numeric (const std::string &str)
   return (pos == str.size());
 }
 
-int64_t
-bpf_unparser::parse_imm (const asm_stmt &stmt, const std::string &str)
+opcode
+bpf_unparser::parse_opcode_tentative (const asm_stmt &stmt, const std::string &str, /*OUT*/bool &numeric_opcode)
 {
-  int64_t val;
+  opcode code;
+  try {
+    code = stoul(str, 0, 0);
+    numeric_opcode = true;
+  } catch (std::exception &e) { // XXX: invalid_argument, out_of_range
+    code = bpf_opcode_id(str);
+    numeric_opcode = false;
+    if (code == 0)
+        throw SEMANTIC_ERROR (_F("invalid bpf embeddedcode opcode '%s'",
+                                 str.c_str()), stmt.tok);
+  }
+  return code;
+}
+
+bool
+bpf_unparser::parse_imm_optional (const asm_stmt &stmt, const std::string &str, /*OUT*/int64_t &val)
+{
+  (void)stmt; /* XXX unused; could report errors, but we don't */
+
   if (str == "BPF_MAXSTRINGLEN")
     val = BPF_MAXSTRINGLEN;
   else if (str == "BPF_F_CURRENT_CPU")
@@ -914,10 +968,218 @@ bpf_unparser::parse_imm (const asm_stmt &stmt, const std::string &str)
   else try {
       val = stol(str, 0, 0);
     } catch (std::exception &e) { // XXX: invalid_argument, out_of_range
+      val = 0;
+      return false;
+    }
+  return true;
+}
+
+int64_t
+bpf_unparser::parse_imm (const asm_stmt &stmt, const std::string &str)
+{
+  int64_t val;
+  if (!parse_imm_optional(stmt, str, val))
+    {
       throw SEMANTIC_ERROR (_F("invalid bpf embeddedcode operand '%s'",
                                str.c_str()), stmt.tok);
     }
   return val;
+}
+
+/* Parse an argument of the form [reg+off] or [reg-off]. */
+void
+bpf_unparser::parse_reg_offset (const asm_stmt &stmt, const std::string &str,
+                                /*OUT*/std::string &reg, /*OUT*/int64_t &off)
+{
+  {
+    if (str.length() < 3 || str[0] != '[' || str[str.size()-1] != ']')
+      goto error;
+    size_t separator = str.find_first_of("+-", 0);
+    if (separator == std::string::npos)
+      goto error;
+    reg = str.substr(1,separator-1);
+    char sep_chr = str[separator];
+    std::string off_str = str.substr(separator+1,str.size()-1-separator-1);
+    off = parse_imm(stmt, off_str);
+    if (sep_chr == '-')
+      off = -off;
+    return;
+  }
+ error:
+  throw SEMANTIC_ERROR (_F("invalid bpf embeddedcode operand '%s', expected [reg+off] or [reg-off]",
+                           str.c_str()), stmt.tok);
+}
+
+/* Parse an assembly opcode, then write the output in stmt. */
+void
+bpf_unparser::parse_asm_opcode (const std::vector<std::string> &args, /*OUT*/asm_stmt &stmt)
+{
+  stmt.kind = "opcode";
+  bool numeric_opcode;
+  stmt.code = parse_opcode_tentative(stmt, args[0], numeric_opcode);
+  opcode tentative_code = stmt.code;
+  stmt.has_jmp_target =
+    BPF_CLASS(stmt.code) == BPF_JMP
+    && BPF_OP(stmt.code) != BPF_EXIT
+    && BPF_OP(stmt.code) != BPF_CALL;
+  stmt.has_fallthrough = // only for jcond
+    stmt.has_jmp_target
+    && BPF_OP(stmt.code) != BPF_JA;
+  // XXX: stmt.fallthrough is computed by visit_embeddedcode
+
+  // XXX default values required for emit_asm_opcode
+  stmt.dest = "-";
+  stmt.src1 = "-";
+  stmt.off = 0;
+  stmt.jmp_target = "-";
+  stmt.imm = 0;
+
+  unsigned cat = bpf_opcode_category(stmt.code);
+  if (args.size() == 5) // op dest src jmp_target/off imm
+    {
+      stmt.dest = args[1];
+      stmt.src1 = args[2];
+      if (stmt.has_jmp_target)
+        {
+          stmt.off = 0;
+          stmt.jmp_target = args[3];
+        }
+      else
+        stmt.off = parse_imm(stmt, args[3]);
+      stmt.imm = parse_imm(stmt, args[4]);
+    }
+  else if (cat == BPF_MEMORY_ARI4 && args.size() == 4) // op src dest imm
+    {
+      stmt.src1 = args[1];
+      stmt.dest = args[2];
+      stmt.imm = parse_imm(stmt, args[3]);
+    }
+  else if (cat == BPF_BRANCH_ARI4 && args.size() == 4 && stmt.has_jmp_target) // op dest imm jmp_target, op dest jmp_target imm, op dest src jmp_target
+    {
+      stmt.dest = args[1];
+
+      // disambiguate opcode taking imm vs src
+      if (parse_imm_optional(stmt, args[2], stmt.imm))
+        {
+          stmt.code = bpf_opcode_variant_imm(stmt.code);
+          stmt.jmp_target = args[3];
+        }
+      else if (parse_imm_optional(stmt, args[3], stmt.imm))
+        {
+          stmt.code = bpf_opcode_variant_imm(stmt.code);
+          stmt.jmp_target = args[2];
+        }
+      else
+        {
+          stmt.src1 = args[2];
+          stmt.jmp_target = args[3];
+        }
+
+      // error if stmt.code was specified numerically and doesn't match
+      if (numeric_opcode && stmt.code != tentative_code)
+        throw SEMANTIC_ERROR (_F("numeric opcode '%x' given argument types for '%x'",
+                                 tentative_code, stmt.code), stmt.tok); // TODO convert opcode to string
+    }
+  else if (cat == BPF_MEMORY_ARI34_SRCOFF && args.size() == 4) // op dest src off
+    {
+      stmt.dest = args[1];
+      stmt.src1 = args[2];
+      stmt.off = parse_imm(stmt, args[3]);
+    }
+  else if (cat == BPF_MEMORY_ARI34_SRCOFF && args.size() == 3) // op dest [src+off]
+    {
+      stmt.dest = args[1];
+      parse_reg_offset(stmt, args[2], stmt.dest, stmt.off);
+    }
+  else if (cat == BPF_MEMORY_ARI34_DSTOFF_IMM && args.size() == 4) // op dest off imm, op dest src imm
+    {
+      stmt.dest = args[1];
+
+      // allow off/src to be ordered according to either convention
+      if (parse_imm_optional(stmt, args[2], stmt.off))
+        {
+          stmt.imm = parse_imm(stmt, args[2]);
+        }
+      else
+        {
+          stmt.imm = parse_imm(stmt, args[2]);
+          stmt.off = parse_imm(stmt, args[3]);
+        }
+    }
+  else if (cat == BPF_MEMORY_ARI34_DSTOFF_IMM && args.size() == 3) // op [dest+off] imm
+    {
+      parse_reg_offset(stmt, args[1], stmt.dest, stmt.off);
+      stmt.imm = parse_imm(stmt, args[2]);
+    }
+  else if (cat == BPF_MEMORY_ARI34_DSTOFF && args.size() == 4) // op dest off src, op dest src off
+    {
+      stmt.dest = args[1];
+
+      // allow off/src to be ordered according to either convention
+      if (parse_imm_optional(stmt, args[2], stmt.off))
+        {
+          stmt.src1 = args[3];
+        }
+      else
+        {
+          stmt.src1 = args[2];
+          stmt.off = parse_imm(stmt, args[3]);
+        }
+    }
+  else if (cat == BPF_MEMORY_ARI34_DSTOFF && args.size() == 3) // op [dest+off] src
+    {
+      parse_reg_offset(stmt, args[1], stmt.dest, stmt.off);
+      stmt.src1 = args[2];
+    }
+  else if (cat == BPF_ALU_ARI3 && args.size() == 3) // op dest src, op dest imm
+    {
+      stmt.dest = args[1];
+
+      // disambiguate opcode taking imm vs src
+      if (parse_imm_optional(stmt, args[2], stmt.imm))
+        {
+          stmt.code = bpf_opcode_variant_imm(stmt.code);
+        }
+      else
+        {
+          stmt.src1 = args[2];
+        }
+
+      // error if stmt.code was specified numerically and doesn't match
+      if (numeric_opcode && stmt.code != tentative_code)
+        throw SEMANTIC_ERROR (_F("numeric opcode '%x' given argument types for '%x'",
+                                 tentative_code, stmt.code), stmt.tok); // TODO convert opcode to string
+    }
+  else if (cat == BPF_MEMORY_ARI3 && args.size() == 3) // op dest imm
+    {
+      stmt.dest = args[1];
+      stmt.imm = parse_imm(stmt, args[2]);
+    }
+  else if (cat == BPF_ALU_ARI2 && args.size() == 2) // op dest
+    {
+      stmt.dest = args[1];
+    }
+  else if (cat == BPF_BRANCH_ARI2 && args.size() == 2) // op jmp_target
+    {
+      stmt.jmp_target = args[1];
+    }
+  else if (cat == BPF_CALL_ARI2 && args.size() == 2) // op imm/helper_name
+    {
+      if (!parse_imm_optional(stmt, args[2], stmt.imm))
+        {
+          // TODO: handle helper_name by convering stmt to a "call" directive?
+          throw SEMANTIC_ERROR (_F("invalid bpf embeddedcode syntax (opcode expects imm, found '%s')", args[2].c_str()), stmt.tok);
+        }
+    }
+  else if (cat == BPF_EXIT_ARI1 && args.size() == 1) // op
+    {
+      // nothing
+    }
+  else
+    {
+      const char * expected_args = bpf_expected_args(cat);
+      throw SEMANTIC_ERROR (_F("invalid bpf embeddedcode syntax (opcode expects %s args, found %llu)", expected_args, (long long) args.size()-1), stmt.tok);
+    }
 }
 
 /* Parse an assembly statement starting from position start in code,
@@ -935,6 +1197,9 @@ bpf_unparser::parse_asm_stmt (embeddedcode *s, size_t start,
   size_t pos;
   bool in_comment = false;
   bool in_string = false;
+  bool in_starting_keyword = true; // first keyword terminated by space
+  bool trailing_comma = false; // newline not after comma separates statements
+  bool is_label = false; // XXX "label:" syntax
 
   // ??? As before, parser is extremely non-rigorous and could do
   // with some tightening in terms of the inputs it accepts.
@@ -944,9 +1209,7 @@ bpf_unparser::parse_asm_stmt (embeddedcode *s, size_t start,
   {
     char c = code[pos];
     char c2 = pos + 1 < n ? code [pos + 1] : 0;
-    if (isspace(c) && !in_string)
-      continue; // skip
-    else if (in_comment)
+    if (in_comment)
       {
         if (c == '*' && c2 == '/')
           ++pos, in_comment = false;
@@ -962,8 +1225,36 @@ bpf_unparser::parse_asm_stmt (embeddedcode *s, size_t start,
         else // accept any char, including whitespace
           arg.push_back(c);
       }
+    else if (c == ';' || (c == '\n' && !trailing_comma)) // reached end of statement
+      {
+        // XXX: This strips out empty args. A more rigorous parser would error.
+        if (arg != "")
+          args.push_back(arg);
+        arg = "";
+        pos++, in_starting_keyword = true;
+        break;
+      }
+    else if (c == ':') // reached end of label
+      {
+        is_label = true;
+        pos++, in_starting_keyword = false;
+        trailing_comma = false;
+        break;
+      }
+    else if (c == ','
+             || (isspace(c) && in_starting_keyword && arg != "")) // reached end of argument
+      {
+        // XXX: This strips out empty args. A more rigorous parser would error.
+        if (arg != "")
+          args.push_back(arg);
+        arg = "";
+        in_starting_keyword = false;
+        trailing_comma = (c == ','); // XXX only after an actual comma
+      }
+    else if (isspace(c) && !in_string)
+      continue; // skip
     else if (c == '/' && c2 == '*')
-      ++pos, in_comment = true;
+      ++pos, in_comment = true; // XXX in_starting_keyword unchanged
     else if (c == '"') // found a literal string
       {
         if (arg.empty() && args.empty())
@@ -974,22 +1265,8 @@ bpf_unparser::parse_asm_stmt (embeddedcode *s, size_t start,
         // more rigorous parser would error on mixing strings and
         // regular chars.
         arg.push_back(c); // include quote
-        in_string = true;
-      }
-    else if (c == ',') // reached end of argument
-      {
-        // XXX: This strips out empty args. A more rigorous parser would error.
-        if (arg != "")
-          args.push_back(arg);
-        arg = "";
-      }
-    else if (c == ';') // reached end of statement
-      {
-        // XXX: This strips out empty args. A more rigorous parser would error.
-        if (arg != "")
-          args.push_back(arg);
-        arg = "";
-        pos++; break;
+        in_string = true, in_starting_keyword = false;
+        trailing_comma = false;
       }
     else // found (we assume) a regular char
       {
@@ -1002,10 +1279,19 @@ bpf_unparser::parse_asm_stmt (embeddedcode *s, size_t start,
         // A more rigorous parser would track in_arg
         // and after_arg states and error on whitespace within args.
         arg.push_back(c);
+        trailing_comma = false;
       }
   }
   // final ';' is optional, so we watch for a trailing arg:
   if (arg != "") args.push_back(arg);
+
+  // handle 'label:' syntax
+  if (is_label)
+    {
+      std::string lb = args[0];
+      args[0] = "label";
+      args.push_back(lb);
+    }
 
   // handle the case with no args
   if (args.empty() && pos >= n)
@@ -1102,43 +1388,15 @@ bpf_unparser::parse_asm_stmt (embeddedcode *s, size_t start,
       if (args.size() < 3)
         throw SEMANTIC_ERROR (_F("invalid bpf embeddedcode syntax (call expects at least 2 args, found %llu)", (long long) args.size()-1), stmt.tok);
       stmt.kind = args[0];
+      // TODO: handle optional dest
       stmt.dest = args[1];
       assert(stmt.params.empty());
       for (unsigned k = 2; k < args.size(); k++)
         stmt.params.push_back(args[k]);
     }
-  else if (is_numeric(args[0]))
+  else if (is_numeric(args[0]) || bpf_opcode_id(args[0]) != 0x0)
     {
-      if (args.size() != 5)
-        throw SEMANTIC_ERROR (_F("invalid bpf embeddedcode syntax (opcode expects 4 args, found %llu)", (long long) args.size()-1), stmt.tok);
-      stmt.kind = "opcode";
-      try {
-        stmt.code = stoul(args[0], 0, 0);
-      } catch (std::exception &e) { // XXX: invalid_argument, out_of_range
-        throw SEMANTIC_ERROR (_F("invalid bpf embeddedcode opcode '%s'",
-                                 args[0].c_str()), stmt.tok);
-      }
-      stmt.dest = args[1];
-      stmt.src1 = args[2];
-
-      stmt.has_jmp_target =
-        BPF_CLASS(stmt.code) == BPF_JMP
-        && BPF_OP(stmt.code) != BPF_EXIT
-        && BPF_OP(stmt.code) != BPF_CALL;
-      stmt.has_fallthrough = // only for jcond
-        stmt.has_jmp_target
-        && BPF_OP(stmt.code) != BPF_JA;
-      // XXX: stmt.fallthrough is computed by visit_embeddedcode
-
-      if (stmt.has_jmp_target)
-        {
-          stmt.off = 0;
-          stmt.jmp_target = args[3];
-        }
-      else
-        stmt.off = parse_imm(stmt, args[3]);
-
-      stmt.imm = parse_imm(stmt, args[4]);
+      parse_asm_opcode(args, stmt);
     }
   else
     throw SEMANTIC_ERROR (_F("unknown bpf embeddedcode operator '%s'",
@@ -1202,7 +1460,7 @@ bpf_unparser::emit_asm_arg (const asm_stmt &stmt, const std::string &arg,
     {
       /* arg is a register number */
       std::string reg = arg[0] == 'r' ? arg.substr(1) : arg;
-      unsigned long num;
+      unsigned long num = ULONG_MAX;
       bool parsed = false;
       try {
         num = stoul(reg, 0, 0);
@@ -1772,7 +2030,8 @@ bpf_unparser::visit_try_block (try_block* s)
   // (this is useful when dealing with nested try-catch blocks).
   catch_jump.pop_back();
 
-  emit_jmp(join_block);
+  if (in_block ())
+    emit_jmp(join_block);
 
   set_block(catch_block);
 
@@ -1796,7 +2055,8 @@ bpf_unparser::visit_try_block (try_block* s)
 
   // After setting up the message, the catch block can run.
   emit_stmt(s->catch_block);
-  emit_jmp(join_block);
+  if (in_block ())
+    emit_jmp(join_block);
 
   set_block(join_block);
 }
@@ -1900,176 +2160,261 @@ bpf_unparser::visit_foreach_loop(foreach_loop* s)
     throw SEMANTIC_ERROR(_("unsupported loop in bpf kernel probe"), s->tok);
   // TODO: Future versions of BPF will include limited looping capability.
 
-  if (s->indexes.size() != 1)
-   throw SEMANTIC_ERROR(_("unhandled multi-dimensional array"), s->tok);
+  // TODO: Handle array_slice in foreach iteration.
+  if (!s->array_slice.empty())
+    throw SEMANTIC_ERROR(_("unsupported array slice in bpf foreach loop"), s->tok);
 
-  vardecl *keydecl = s->indexes[0]->referent;
-  auto i = this_locals->find(keydecl);
-  if (i == this_locals->end())
-    throw SEMANTIC_ERROR(_("unknown index"), keydecl->tok);
+  bool composite_key = s->indexes.size() != 1;
+  std::vector<vardecl *> key_decls;
+  std::vector<value *> keys; // key_decls[i] refers to keys[i]
+  std::vector<unsigned> key_offsets; // key_decls[i] is at keys_offset[i]
 
+  // Populate key_decls
+  for (unsigned k = 0; k < s->indexes.size(); k++)
+    {
+      vardecl *keydecl = s->indexes[k]->referent;
+      key_decls.push_back(keydecl);
+      auto i = this_locals->find(keydecl);
+      if (i == this_locals->end())
+        throw SEMANTIC_ERROR(_("unknown index"), keydecl->tok);
+      keys.push_back(i->second);
+    }
+
+  // Get arraydecl
   symbol *a;
   if (! (a = dynamic_cast<symbol *>(s->base)))
     throw SEMANTIC_ERROR(_("unknown type"), s->base->tok);
   vardecl *arraydecl = a->referent;
 
-  // PR23875: foreach should handle string keys
-  auto type = arraydecl->index_types[0];
-  if (type != pe_long && type != pe_string)
-    throw SEMANTIC_ERROR(_("unhandled foreach index type"), s->tok);
-  int keysize = 8; // XXX: If a string key, foreach will handle a pointer to it.
+  // Populate key_offsets, foreach_info
+  globals::foreach_info info;
+  info.sort_direction = s->sort_direction;
+  info.sort_column = s->sort_column;
+  // XXX: s->sort_column may be uninitialized if s->sort_direction == 0
+  //if (s->sort_direction == 0) info.sort_column = 1;
+  info.keysize = 0;
+  info.sort_column_size = 0;
+  info.sort_column_ofs = 0;
+  for (unsigned k = 0; k < arraydecl->index_types.size(); k++)
+    {
+      auto type = arraydecl->index_types[k];
+      int this_column_size;
+      // PR23875: foreach should handle string keys
+      if (type == pe_long)
+        {
+          this_column_size = 8;
+        }
+      else if (type == pe_string)
+        {
+          this_column_size = BPF_MAXSTRINGLEN;
+        }
+      else
+        {
+          throw SEMANTIC_ERROR(_("unhandled foreach index type"), s->tok);
+        }
+      if (info.sort_column == k + 1) // record sort column
+        {
+          info.sort_column_size = this_column_size;
+          info.sort_column_ofs = info.keysize;
+        }
+      key_offsets.push_back(info.keysize);
+      info.keysize += this_column_size;
+    }
+  if (arraydecl->index_types.size() == 1)
+    {
+      // Signals map_get_next_key to treat the key as a single value:
+      info.sort_column_ofs = -1;
+    }
 
+  // Save foreach_info to foreach_loop_info_table
+  globals::loop_idx foreach_id = glob.foreach_loop_info.size();
+  glob.foreach_loop_info.push_back(info);
+
+  // Get map_slot for arraydecl
   auto g = glob.globals.find(arraydecl);
   if (g == glob.globals.end())
     throw SEMANTIC_ERROR(_("unknown array"), arraydecl->tok);
-
   int map_id = g->second.map_id;
+  bool is_stat_array = g->second.is_stat();
+
   // PR23476: Handle foreach iteration for stats arrays.
-  assert (!g->second.is_scalar());
-  if (g->second.is_stat())
+  assert(!g->second.is_scalar()); // XXX scalar map slot was used for arraydecl
+  if (is_stat_array)
     {
+      // Get stats_map for arraydecl
       auto all_fields = glob.array_stats.find(arraydecl);
       if (all_fields == glob.array_stats.end())
         throw SEMANTIC_ERROR(_("unknown stats array"), arraydecl->tok);
+
+      // Get the correct map for aggregates:
       auto one_field = all_fields->second.find(globals::stat_iter_field);
       assert (one_field != all_fields->second.end());
       map_id = one_field->second;
-      // XXX: Since foreach only handles/returns keys, it's sufficient
-      // to simply iterate one of the stat field maps.
 
-      // If sorting on aggregate is required (s->sort_aggr),
-      // map_get_next_key will need to perform aggregation
-      // calculations that might require access to more than one map.
+      // XXX: Since foreach only handles/returns keys, for the basic
+      // case it's sufficient to simply iterate one of the stat field
+      // maps.
       //
-      // TODO PR24528: need to pass sort_aggr to the interpreter.
-      // TODO PR24528: use existing foreach_sort_stat.exp testcase to check this.
-      if (s->sort_column == 0)
+      // TODO PR24528: But if sorting on aggregate is required
+      // (when info.sort_column==0, s->sort_aggr is set),
+      // then map_get_next_key will need to perform aggregation
+      // calculations, and these will require access to more than one map.
+      //
+      // TODO PR24528: Need to pass s->sort_aggr, agg_idx via foreach_info.
+      // TODO PR24528: Verify with foreach_sort_stat.exp testcase.
+      if (info.sort_column == 0)
         throw SEMANTIC_ERROR(_("unsupported sorted iteration on stat aggregate"), arraydecl->tok);
     }
 
-  value *limit = this_prog.new_reg();
-  value *key = i->second;
+  // Initialize constants, values, blocks
+  int keyref_size = 8; // the BPF stack holds a pointer to the key
+  value *limit;
+  if (s->limit)
+    limit = this_prog.new_reg();
+  else
+    limit = this_prog.new_imm(-1);
+  value *keyref;
+  if (composite_key)
+    keyref = this_prog.new_reg();
+  else
+    keyref = keys[0];
   value *i0 = this_prog.new_imm(0);
-  value *key_ofs = this_prog.new_imm(-keysize);
-  value *newkey_ofs = this_prog.new_imm(-keysize-keysize);
+  value *id = this_prog.new_imm(foreach_id);
   value *frame = this_prog.lookup_reg(BPF_REG_10);
   block *body_block = this_prog.new_block ();
   block *load_block_1 = this_prog.new_block ();
   block *iter_block = this_prog.new_block ();
   block *join_block = this_prog.new_block ();
 
-  // Track iteration limit.
+  // Reserve stack space; XXX may be cleared by the loop body
+  value *key_ofs = this_prog.new_imm(-keyref_size);
+  value *newkey_ofs = this_prog.new_imm(-keyref_size-keyref_size);
+  this_prog.use_tmp_space(2*keyref_size);
+
+  // Setup iteration limit
   if (s->limit)
     this_prog.mk_mov(this_ins, limit, emit_expr(s->limit));
-  else
-    // XXX may want 'limit = this_prog.new_imm(-1);'
-    this_prog.mk_mov(this_ins, limit, this_prog.new_imm(-1));
 
-  // XXX: s->sort_column may be uninitialized if s->sort_direction == 0
-  unsigned sort_column = s->sort_column;
-  //unsigned sort_column = s->sort_direction == 0 ? 0 : s->sort_column;
-
-  // Get the first key.
+  // Get the first key
   this_prog.load_map (this_ins, this_prog.lookup_reg(BPF_REG_1), map_id);
   this_prog.mk_mov (this_ins, this_prog.lookup_reg(BPF_REG_2), i0);
   this_prog.mk_binary (this_ins, BPF_ADD, this_prog.lookup_reg(BPF_REG_3), 
                        frame, newkey_ofs);
-  this_prog.mk_mov (this_ins, this_prog.lookup_reg(BPF_REG_4),
-                    this_prog.new_imm(SORT_FLAGS(sort_column,s->sort_direction)));
+  this_prog.mk_mov (this_ins, this_prog.lookup_reg(BPF_REG_4), id);
   this_prog.mk_mov (this_ins, this_prog.lookup_reg(BPF_REG_5), limit);
   this_prog.mk_call (this_ins, BPF_FUNC_map_get_next_key, 5);
   this_prog.mk_jcond (this_ins, NE, this_prog.lookup_reg(BPF_REG_0), i0,
                       join_block, load_block_1);
 
-  this_prog.use_tmp_space(2*keysize);
-
-  emit_jmp(load_block_1);
-
-  // Do loop body
+  // Enter loop body
+  set_block(body_block);
   loop_break.push_back (join_block);
   loop_cont.push_back (iter_block);
-
-  set_block(body_block);
-  emit_stmt(s->block);
+  emit_stmt(s->block); // XXX may clobber key, newkey at top of stack
+  loop_cont.pop_back ();
+  loop_break.pop_back();
   if (in_block ())
     emit_jmp(iter_block);
 
-  loop_cont.pop_back ();
-  loop_break.pop_back ();
-
-  // Call map_get_next_key, exit loop if it doesn't return 0
+  // Get the next key, exit loop if map_get_next_key doesn't return 0
   set_block(iter_block);
-
+  this_prog.mk_st (this_ins, BPF_DW, frame, -keyref_size /*key_ofs*/, keyref);
   this_prog.load_map (this_ins, this_prog.lookup_reg(BPF_REG_1), map_id);
-  this_prog.mk_st (this_ins, BPF_DW, frame, -keysize, key);
   this_prog.mk_binary (this_ins, BPF_ADD, this_prog.lookup_reg(BPF_REG_2),
                        frame, key_ofs);
   this_prog.mk_binary (this_ins, BPF_ADD, this_prog.lookup_reg(BPF_REG_3),
                        frame, newkey_ofs);
-  this_prog.mk_mov (this_ins, this_prog.lookup_reg(BPF_REG_4),
-                    this_prog.new_imm(SORT_FLAGS(sort_column,s->sort_direction)));
+  this_prog.mk_mov (this_ins, this_prog.lookup_reg(BPF_REG_4), id);
   this_prog.mk_mov (this_ins, this_prog.lookup_reg(BPF_REG_5), limit);
   this_prog.mk_call (this_ins, BPF_FUNC_map_get_next_key, 5);
   this_prog.mk_jcond (this_ins, NE, this_prog.lookup_reg(BPF_REG_0), i0,
                       join_block, load_block_1);
 
-  // Load next key, decrement limit if applicable
+  // Load from newkey_ofs to keyref
   set_block(load_block_1);
+  this_prog.mk_ld (this_ins, BPF_DW, keyref,
+                   frame, -keyref_size-keyref_size /*newkey_ofs*/);
+  // XXX For single-key arrays, keyref already contains the value:
+  // - either the integer value (for a pe_long key)
+  // - or a pointer to the string value (for a pe_string key)
 
-  // Return the key. If it's a string, it's already a string address.
-  this_prog.mk_ld (this_ins, BPF_DW, key, frame, -keysize-keysize);
+  // PR23478: Unpack keyref into individual indices
+  if (composite_key)
+    {
+      for (unsigned k = 0; k < s->indexes.size(); k++)
+        {
+          switch (key_decls[k]->type)
+            {
+            case pe_long:
+              // XXX load the long value
+              this_prog.mk_ld (this_ins, BPF_DW, keys[k], keyref, key_offsets[k]);
+              break;
+            case pe_string:
+              // XXX pass a pointer to the string value
+              this_prog.mk_binary (this_ins, BPF_ADD, keys[k],
+                                   keyref, this_prog.new_imm(key_offsets[k]));
+              break;
+            default:
+              throw SEMANTIC_ERROR (_("unhandled foreach key type"),
+                                    key_decls[k]->tok);
+            }
+        }
+    }
 
-  // If the foreach loop iterates over the value, then fetch it too.
+  // If the foreach loop requests a value, retrieve the value
   if (s->value)
     {
       vardecl *valdecl = s->value->referent;
 
-      auto j = this_locals->find(valdecl);
-      if (j == this_locals->end())
-        throw SEMANTIC_ERROR(_("unknown value"), valdecl->tok);
+      // TODO PR23476: is s->value ever set for a statistic array iteration?
+      if (is_stat_array)
+        throw SEMANTIC_ERROR(_("unsupported value iteration on stat aggregate"), arraydecl->tok);
 
-      value *val = j->second;
+      auto i = this_locals->find(valdecl);
+      if (i == this_locals->end())
+        throw SEMANTIC_ERROR(_("unknown value"), valdecl->tok);
+      value *val = i->second;
+
       block *load_block_2 = this_prog.new_block ();
 
-      // To lookup value, we need to pass a pointer to the key. If the key is an
-      // integer, we need to pass the location in the stack.
       this_prog.load_map (this_ins, this_prog.lookup_reg(BPF_REG_1), map_id);
-      switch (keydecl->type)
+      // To lookup value, we pass a pointer to the key.
+      // If the key is a single integer, we need to pass the integer value's
+      // location in the stack. Otherwise, keyref already holds the pointer.
+      if (!composite_key && key_decls[0]->type == pe_long)
         {
-          case pe_long:
-            this_prog.mk_binary (this_ins, BPF_ADD, this_prog.lookup_reg(BPF_REG_2),
-                                 frame, newkey_ofs);
-            break;
-          case pe_string:
-            this_prog.mk_mov (this_ins, this_prog.lookup_reg(BPF_REG_2), key);
-            break;
-          default:
-            throw SEMANTIC_ERROR (_("unhandled foreach key type"), keydecl->tok);
+          // XXX reuse not-yet-clobbered newkey value from map_get_next_key
+          this_prog.mk_binary (this_ins, BPF_ADD,
+                               this_prog.lookup_reg(BPF_REG_2),
+                               frame, newkey_ofs);
         }
-
-      this_prog.mk_call (this_ins, BPF_FUNC_map_lookup_elem, 2);
+      else
+        {
+          this_prog.mk_mov (this_ins, this_prog.lookup_reg(BPF_REG_2), keyref);
+        }
+      this_prog.mk_call(this_ins, BPF_FUNC_map_lookup_elem, 2);
       this_prog.mk_jcond (this_ins, EQ, this_prog.lookup_reg(BPF_REG_0), i0,
                           join_block, load_block_2);
 
-      // Load the corresponding value if key is valid.
+      // Load the corresponding value if key was valid
       set_block(load_block_2);
-
-      // If the value is an integer, we must deference the pointer.
       switch (valdecl->type)
         {
-          case pe_long:
-            this_prog.mk_ld(this_ins, BPF_DW, val, this_prog.lookup_reg(BPF_REG_0), 0);
-            break;
-          case pe_string:
-            this_prog.mk_mov(this_ins, val, this_prog.lookup_reg(BPF_REG_0));
-            break;
-          default:
-            throw SEMANTIC_ERROR (_("unhandled foreach value type"), valdecl->tok);
+        case pe_long:
+          // If the value is an integer, we must dereference the pointer:
+          this_prog.mk_ld(this_ins, BPF_DW, val, this_prog.lookup_reg(BPF_REG_0), 0);
+          break;
+        case pe_string:
+          this_prog.mk_mov(this_ins, val, this_prog.lookup_reg(BPF_REG_0));
+          break;
+        default:
+          throw SEMANTIC_ERROR (_("unhandled foreach value type"), valdecl->tok);
         }
     }
 
+  // Decrement the iteration limit
   if (s->limit)
-      this_prog.mk_binary (this_ins, BPF_ADD, limit, limit, this_prog.new_imm(-1));
+    this_prog.mk_binary (this_ins, BPF_ADD, limit, limit, this_prog.new_imm(-1));
 
   emit_jmp(body_block);
   set_block(join_block);
@@ -2720,7 +3065,6 @@ bpf_unparser::visit_arrayindex(arrayindex *e)
 
       if (g->second.is_stat())
         throw SEMANTIC_ERROR (_("unhandled statistics variable"), v->tok); // TODOXXX PR23476
-
       unsigned element = v->arity;
       int key_ofs = 0;
 
@@ -4366,6 +4710,40 @@ output_interned_aggregates(BPF_Output &eo, globals& glob)
   agg->shdr->sh_type = SHT_PROGBITS;
 }
 
+static void
+output_foreach_loop_info(BPF_Output &eo, globals& glob)
+{
+  if (glob.foreach_loop_info.empty())
+    return;
+
+  /* XXX This method of serializing the foreach loop info struct is
+     clumsy but not so likely to run into struct ser/de weirdness. */
+  BPF_Section *agg = eo.new_scn("stapbpf_foreach_loop_info");
+  Elf_Data *data = agg->data;
+  size_t interned_foreach_info_len =
+    sizeof(uint64_t) * globals::n_foreach_info_fields;
+  unsigned n_foreach_loops = glob.foreach_loop_info.size();
+  data->d_buf = (void *)calloc(n_foreach_loops, interned_foreach_info_len);
+  data->d_size = interned_foreach_info_len * n_foreach_loops;
+  size_t ofs = 0;
+  uint64_t *ix = (uint64_t *)data->d_buf;
+  for (auto i = glob.foreach_loop_info.begin();
+       i != glob.foreach_loop_info.end(); i++)
+    {
+      globals::interned_foreach_info ifi = globals::intern_foreach_info(*i);
+      for (auto j = ifi.begin(); j != ifi.end(); j++)
+        {
+          *ix = (uint64_t)*j;
+          ofs += sizeof(uint64_t);
+          ix++;
+        }
+    }
+  assert (ofs == data->d_size);
+  data->d_type = ELF_T_BYTE;
+  agg->free_data = true;
+  agg->shdr->sh_type = SHT_PROGBITS;
+}
+
 void
 bpf_unparser::add_prologue()
 {
@@ -4806,6 +5184,7 @@ translate_bpf_pass (systemtap_session& s)
 {
   using namespace bpf;
 
+  init_bpf_opcode_tables();
   init_bpf_helper_tables();
 
   if (elf_version(EV_CURRENT) == EV_NONE)
@@ -4981,6 +5360,7 @@ translate_bpf_pass (systemtap_session& s)
       if (s.python_derived_probes)
         warn_for_bpf(s, s.python_derived_probes, "python probe");
       // s.task_finder_derived_probes -- synthetic
+      // s.vma_tracker_derived_probes -- synthetic
       // s.dynprobe_derived_probes -- synthetic, dyninst only
 
       output_kernel_version(eo, s.kernel_base_release);
@@ -4988,6 +5368,7 @@ translate_bpf_pass (systemtap_session& s)
       output_stapbpf_script_name(eo, escaped_literal_string(s.script_basename()));
       output_interned_strings(eo, glob);
       output_interned_aggregates(eo, glob);
+      output_foreach_loop_info(eo, glob);
       output_symbols_sections(eo);
 
       int64_t r = elf_update(eo.elf, ELF_C_WRITE_MMAP);

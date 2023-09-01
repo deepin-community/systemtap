@@ -79,6 +79,7 @@ int target_pid = 0;
 char *target_cmd = NULL;
 
 /* ../staprun/common.c functions */
+__attribute__ ((format (printf, 1, 2)))
 void eprintf(const char *fmt, ...)
 {
   va_list va;
@@ -143,6 +144,9 @@ static std::vector<std::string> interned_strings;
 
 // Table of map id's for statistical aggregates:
 static std::unordered_map<bpf::globals::agg_idx, bpf::globals::stats_map> aggregates;
+
+// Table of foreach loop information:
+static std::vector<bpf::globals::foreach_info> foreach_loop_info;
 
 // XXX: Required static data and methods from bpf::globals, shared with translator.
 #include "../bpf-shared-globals.h"
@@ -269,7 +273,7 @@ static std::vector<uprobe_data> uprobes;
 
 // TODO: Move fatal() to bpfinterp.h and replace abort() calls in the interpreter.
 // TODO: Add warn() option.
-static void __attribute__((noreturn))
+static void __attribute__((noreturn))  __attribute__ ((format (printf, 1, 2)))
 fatal(const char *str, ...)
 {
   if (module_name)
@@ -796,7 +800,7 @@ kprobe_collect_from_syms(Elf_Data *sym_data, Elf_Data *str_data)
       if (syms[i].st_name < str_data->d_size)
 	name = static_cast<char *>(str_data->d_buf) + syms[i].st_name;
       else
-	fatal("symbol %u has invalid string index\n", i);
+	fatal("symbol %zu has invalid string index\n", i);
       maybe_collect_kprobe(name, i, syms[i].st_shndx, syms[i].st_value);
     }
 }
@@ -1384,7 +1388,8 @@ init_perf_transport()
       // Create a data structure to track what's happening on each CPU:
       bpf_transport_context *ctx
         = new bpf_transport_context(cpu, pmu_fd, ncpus, map_attrs, &map_fds,
-                                    output_f, &interned_strings, &aggregates, &error);
+                                    output_f, &interned_strings, &aggregates,
+                                    &foreach_loop_info, &error);
       transport_contexts.push_back(ctx);
     }
 
@@ -1502,6 +1507,7 @@ load_bpf_file(const char *module)
   unsigned script_name_idx = 0;
   unsigned interned_strings_idx = 0;
   unsigned aggregates_idx = 0;
+  unsigned foreach_loop_info_idx = 0;
   unsigned kprobes_idx = 0;
   unsigned begin_idx = 0;
   unsigned end_idx = 0;
@@ -1545,6 +1551,8 @@ load_bpf_file(const char *module)
         interned_strings_idx = i;
       else if (strcmp(shname, "stapbpf_aggregates") == 0)
         aggregates_idx = i;
+      else if (strcmp(shname, "stapbpf_foreach_loop_info") == 0)
+        foreach_loop_info_idx = i;
       else if (strcmp(shname, "version") == 0)
 	version_idx = i;
       else if (strcmp(shname, "maps") == 0)
@@ -1625,6 +1633,25 @@ load_bpf_file(const char *module)
             }
           aggregates[agg_id] = bpf::globals::deintern_stats_map(ism);
           i += 1 + bpf::globals::stat_fields.size();
+          ofs = sizeof(uint64_t) * i;
+        }
+    }
+
+  // PR23478: Initialize table of foreach loop information.
+  if (foreach_loop_info_idx != 0)
+    {
+      uint64_t *foreachtab = static_cast<uint64_t *>(sh_data[foreach_loop_info_idx]->d_buf);
+      unsigned long long foreachtab_size = shdrs[foreach_loop_info_idx]->sh_size;
+      unsigned ofs = 0; unsigned i = 0;
+      while (ofs < foreachtab_size)
+        {
+          bpf::globals::interned_foreach_info ifi;
+          for (unsigned j = 0; j < bpf::globals::n_foreach_info_fields; j++)
+            {
+              ifi.push_back(foreachtab[i+j]);
+            }
+          foreach_loop_info.push_back(bpf::globals::deintern_foreach_info(ifi));
+          i += bpf::globals::n_foreach_info_fields;
           ofs = sizeof(uint64_t) * i;
         }
     }
@@ -1993,7 +2020,7 @@ procfs_write_event_loop (procfsprobe_data* data, bpf_transport_context* uctx)
                     path, strerror(errno));
 
         if (bytes_read > 0)
-          msg.append(std::string(buffer_feed));
+          msg.append(buffer_feed, bytes_read);
 
       } while (bytes_read > 0);
 
@@ -2186,7 +2213,7 @@ main(int argc, char **argv)
 
       case 'V':
         printf("Systemtap BPF loader/runner (version %s, %s)\n"
-               "Copyright (C) 2016-2021 Red Hat, Inc. and others\n" // PRERELEASE
+               "Copyright (C) 2016-2022 Red Hat, Inc. and others\n" // PRERELEASE
                "This is free software; "
                "see the source for copying conditions.\n",
                VERSION, STAP_EXTENDED_VERSION);
@@ -2226,7 +2253,8 @@ main(int argc, char **argv)
   unsigned ncpus = map_attrs[bpf::globals::perf_event_map_idx].max_entries;
   bpf_transport_context uctx(default_cpu, -1/*pmu_fd*/, ncpus,
                              map_attrs, &map_fds, output_f,
-                             &interned_strings, &aggregates, &error);
+                             &interned_strings, &aggregates,
+                             &foreach_loop_info, &error);
 
   if (create_group_fds() < 0)
     fatal("Error creating perf event group: %s\n", strerror(errno));

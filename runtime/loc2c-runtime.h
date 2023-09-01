@@ -106,7 +106,16 @@
 #define pt_dwarf_register_22(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm5, %0" : "=r"(v)); v;})
 #define pt_dwarf_register_23(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm6, %0" : "=r"(v)); v;})
 #define pt_dwarf_register_24(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm7, %0" : "=r"(v)); v;})
-#define pt_regs_maxno 24
+#define pt_dwarf_register_25(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm8, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_26(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm9, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_27(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm10, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_28(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm11, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_29(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm12, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_30(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm13, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_31(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm14, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_32(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm15, %0" : "=r"(v)); v;})
+
+#define pt_regs_maxno 32
   
 #elif defined __i386__
 
@@ -155,7 +164,23 @@
 #define pt_dwarf_register_13(regs)	regs->r13
 #define pt_dwarf_register_14(regs)	regs->r14
 #define pt_dwarf_register_15(regs)	regs->r15
-#define pt_regs_maxno 15
+#define pt_dwarf_register_17(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm0, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_18(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm1, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_19(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm2, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_20(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm3, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_21(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm4, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_22(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm5, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_23(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm6, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_24(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm7, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_25(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm8, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_26(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm9, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_27(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm10, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_28(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm11, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_29(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm12, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_30(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm13, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_31(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm14, %0" : "=r"(v)); v;})
+#define pt_dwarf_register_32(regs) ({uint64_t v; __asm__ __volatile__("movq %%xmm15, %0" : "=r"(v)); v;})
+#define pt_regs_maxno 32
   
 #elif defined __powerpc__
 
@@ -176,6 +201,42 @@
 #define pt_regs_store_register(pt_regs,regno,value) \
   (pt_regs->regs[regno] = (value))
 #define pt_regs_maxno 31 /* ignore special registers */
+
+#elif defined __riscv
+
+#define pt_dwarf_register_0(regs)	regs->epc
+#define pt_dwarf_register_1(regs)	regs->ra
+#define pt_dwarf_register_2(regs)	regs->sp
+#define pt_dwarf_register_3(regs)	regs->gp
+#define pt_dwarf_register_4(regs)	regs->tp
+#define pt_dwarf_register_5(regs)	regs->t0
+#define pt_dwarf_register_6(regs)	regs->t1
+#define pt_dwarf_register_7(regs)	regs->t2
+#define pt_dwarf_register_8(regs)	regs->s0
+#define pt_dwarf_register_9(regs)	regs->s1
+#define pt_dwarf_register_10(regs)	regs->a0
+#define pt_dwarf_register_11(regs)	regs->a1
+#define pt_dwarf_register_12(regs)	regs->a2
+#define pt_dwarf_register_13(regs)	regs->a3
+#define pt_dwarf_register_14(regs)	regs->a4
+#define pt_dwarf_register_15(regs)	regs->a5
+#define pt_dwarf_register_16(regs)	regs->a6
+#define pt_dwarf_register_17(regs)	regs->a7
+#define pt_dwarf_register_18(regs)	regs->s2
+#define pt_dwarf_register_19(regs)	regs->s3
+#define pt_dwarf_register_20(regs)	regs->s4
+#define pt_dwarf_register_21(regs)	regs->s5
+#define pt_dwarf_register_22(regs)	regs->s6
+#define pt_dwarf_register_23(regs)	regs->s7
+#define pt_dwarf_register_24(regs)	regs->s8
+#define pt_dwarf_register_25(regs)	regs->s9
+#define pt_dwarf_register_26(regs)	regs->s10
+#define pt_dwarf_register_27(regs)	regs->s11
+#define pt_dwarf_register_28(regs)	regs->t3
+#define pt_dwarf_register_29(regs)	regs->t4
+#define pt_dwarf_register_30(regs)	regs->t5
+#define pt_dwarf_register_31(regs)	regs->t6
+#define pt_regs_maxno 31
 
 #elif defined (__aarch64__)
 
@@ -223,7 +284,31 @@
 #define pt_dwarf_register_69(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v5.d[0]" : "=r"(v)); v;})
 #define pt_dwarf_register_70(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v6.d[0]" : "=r"(v)); v;})
 #define pt_dwarf_register_71(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v7.d[0]" : "=r"(v)); v;})
-#define pt_regs_maxno 71
+#define pt_dwarf_register_72(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v8.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_73(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v9.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_74(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v10.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_75(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v11.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_76(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v12.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_77(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v13.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_78(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v14.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_79(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v15.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_80(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v16.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_81(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v17.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_82(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v18.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_83(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v19.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_84(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v20.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_85(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v21.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_86(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v22.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_87(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v23.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_88(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v24.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_89(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v25.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_90(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v26.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_91(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v27.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_92(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v28.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_93(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v29.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_94(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v30.d[0]" : "=r"(v)); v;})
+#define pt_dwarf_register_95(regs) ({uint64_t v; __asm__ __volatile__("mov %0, v31.d[0]" : "=r"(v)); v;})
+#define pt_regs_maxno 95
 
 #elif defined (__arm__)
 
@@ -237,13 +322,16 @@
   
 #elif defined (__s390__) || defined (__s390x__)
 
+#define _fetch_float_register(regno) \
+  ({unsigned long v;  __asm__ __volatile__("lgdr %[_DEST],%%f%n[_REGNO]" : [_DEST] "=r" (v): [_REGNO] "n" (-(regno-16))) ; v;})
+
 #undef pt_regs_fetch_register
 #undef pt_regs_store_register
 #define pt_regs_fetch_register(pt_regs,regno) \
-  ((intptr_t) pt_regs->gprs[regno])
+  (regno < 16 ? ((intptr_t) pt_regs->gprs[regno]) : (_fetch_float_register(regno)))
 #define pt_regs_store_register(pt_regs,regno,value) \
   (pt_regs->gprs[regno] = (value))
-#define pt_regs_maxno 16 /* NUM_GPRS */
+#define pt_regs_maxno 32 /* NUM_GPRS */
   
 #endif
 

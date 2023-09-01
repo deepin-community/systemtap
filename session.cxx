@@ -81,6 +81,7 @@ systemtap_session::systemtap_session ():
   utrace_derived_probes(0),
   itrace_derived_probes(0),
   task_finder_derived_probes(0),
+  vma_tracker_derived_probes(0),
   timer_derived_probes(0),
   netfilter_derived_probes(0),
   profile_derived_probes(0),
@@ -166,6 +167,8 @@ systemtap_session::systemtap_session ():
   server_cache = NULL;
   auto_privilege_level_msg = "";
   auto_server_msgs.clear ();
+  module_sign_given = false;
+  module_sign_mok_path = "";
   use_server_on_error = false;
   try_server_status = try_server_unset;
   use_remote_prefix = false;
@@ -279,6 +282,7 @@ systemtap_session::systemtap_session (const systemtap_session& other,
   utrace_derived_probes(0),
   itrace_derived_probes(0),
   task_finder_derived_probes(0),
+  vma_tracker_derived_probes(0),
   timer_derived_probes(0),
   netfilter_derived_probes(0),
   profile_derived_probes(0),
@@ -492,10 +496,10 @@ void
 systemtap_session::version ()
 {
   cout << _F("Systemtap translator/driver (version %s)\n"
-             "Copyright (C) 2005-2021 Red Hat, Inc. and others\n"   // PRERELEASE
+             "Copyright (C) 2005-2022 Red Hat, Inc. and others\n"   // PRERELEASE
              "This is free software; see the source for copying conditions.\n",
              version_string().c_str());
-  cout << _F("tested kernel versions: %s ... %s\n", "2.6.32", "5.12.0-rc2");   // PRERELEASE
+  cout << _F("tested kernel versions: %s ... %s\n", "2.6.32", "6.1.0-rc3");   // PRERELEASE
   
   cout << _("enabled features:")
 #ifdef HAVE_AVAHI
@@ -1309,6 +1313,20 @@ systemtap_session::parse_cmdline (int argc, char * const argv [])
 	  insert_loaded_modules();
 	  break;
 
+#if HAVE_NSS
+	case LONG_OPT_SIGN_MODULE:
+	  module_sign_given = true;
+	  if (optarg)
+	    {
+	      module_sign_mok_path = optarg;
+	      if (!client_options) {
+		cerr << _F("ERROR: %s is only valid with %s", "--sign-module=PATH", "--client-options") << endl;
+		return 1;
+	      }
+	    }
+	  break;
+#endif
+
 	case LONG_OPT_REMOTE:
 	  if (client_options) {
 	    cerr << _F("ERROR: %s is invalid with %s", "--remote", "--client-options") << endl;
@@ -1676,6 +1694,13 @@ systemtap_session::parse_cmdline (int argc, char * const argv [])
         }
     }
 
+  // add the -c CMD / -x PID into the unwindsyms list as if -d ... were given
+  try {
+    if (cmd != "" || target_pid != 0)
+      additional_unwindsym_modules.insert(resolve_path(find_executable(cmd_file(),
+                                                                       sysroot, sysenv)));
+  } catch (...) { }
+  
   for (std::set<std::string>::iterator it = additional_unwindsym_modules.begin();
        it != additional_unwindsym_modules.end();
        it++)
@@ -1985,8 +2010,9 @@ systemtap_session::check_options (int argc, char * const argv [])
         clog << _("This host requires module signing.") << endl;
       
       // Force server use to be on, if not on already.
-      enable_auto_server (
-	_("The kernel on your system requires modules to be signed for loading.\n"
+      if (! module_sign_given)
+	enable_auto_server (
+	  _("The kernel on your system requires modules to be signed for loading.\n"
 	  "The module created by compiling your script must be signed by a systemtap "
 	  "compile-server.  [man stap-server]"));
 

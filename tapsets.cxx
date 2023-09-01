@@ -23,6 +23,7 @@
 #include "dwflpp.h"
 #include "setupdwfl.h"
 #include "loc2stap.h"
+#include "analysis.h"
 #include <gelf.h>
 
 #include "sdt_types.h"
@@ -559,7 +560,8 @@ struct dwarf_derived_probe: public generic_kprobe_derived_probe
   interned_string user_lib;
   bool access_vars;
 
-  void printsig (std::ostream &o, bool nest=true) const;
+  void printsig (std::ostream &o) const;
+  void printsig_nonest (std::ostream &o) const;
   virtual void join_group (systemtap_session& s);
   void emit_probe_local_init(systemtap_session& s, translator_output * o);
   void getargs(std::list<std::string> &arg_set) const;
@@ -1163,6 +1165,15 @@ query_symtab_func_info (func_info & fi, dwarf_query * q)
   q->dw.get_module_dwarf(false, false);
   entrypc -= q->dw.module_bias;
 
+  // PR29676.  We consult the symbol tables of both the elf and
+  // dwarf files. The 2 results can contain duplicates so
+  // check results before continuing to create new probe points
+  for(auto ddp_it = q->results.begin(); ddp_it != q->results.end(); ++ddp_it){
+    dwarf_derived_probe *ddp = dynamic_cast<dwarf_derived_probe *> (*ddp_it);
+    if(ddp && ddp->addr == entrypc)
+      return;
+  }
+
   // If there are already probes in this module, lets not duplicate.
   // This can come from other weak symbols/aliases or existing
   // matches from Dwarf DIE functions.  Try to add this entrypc to the
@@ -1245,7 +1256,7 @@ dwarf_query::handle_query_module()
   // in the symbol table but not in dwarf and minidebuginfo is
   // located in the gnu_debugdata section, alias_dupes checking
   // is done before adding any probe points
-  if (results.size()==0 && !pending_interrupts)
+  if(!pending_interrupts)
     query_module_symtab();
 }
 
@@ -2280,9 +2291,16 @@ query_dwarf_func (Dwarf_Die * func, dwarf_query * q)
               // up the ELF symbol name and rely on a heuristic.
               GElf_Sym sym;
               GElf_Off off = 0;
-              const char *name = dwfl_module_addrinfo (q->dw.module, entrypc,
+	      Dwarf_Addr elf_bias;
+	      Elf *elf = dwfl_module_getelf (q->dw.module, &elf_bias);
+	      assert(elf);
+
+	      const char *name = dwfl_module_addrinfo (q->dw.module, entrypc + elf_bias,
                                                        &off, &sym, NULL, NULL, NULL);
 
+	      if (q->sess.verbose>3)
+		      clog << _F("%s = dwfl_module_addrinfo(entrypc=%p + %p)\n",
+				 name, (void*)entrypc, (void *)elf_bias);
               if (name != NULL && strstr(name, ".part.") != NULL)
                 {
                   if (q->sess.verbose>2)
@@ -2532,6 +2550,7 @@ validate_module_elf (Dwfl_Module *mod, const char *name,  base_query *q)
     case EM_ARM: expect_machine = "arm*"; break;
     case EM_AARCH64: expect_machine = "arm64"; break;
     case EM_MIPS: expect_machine = "mips"; break;
+    case EM_RISCV: expect_machine = "riscv"; break;
       // XXX: fill in some more of these
     default: expect_machine = "?"; break;
     }
@@ -3716,7 +3735,8 @@ dwarf_pretty_print::recurse_struct_members (Dwarf_Die* type, target_symbol* e,
               pf->raw_components.append("<struct>");
             pf->raw_components.append("=");
 
-            if (dwarf_hasattr_integrate (&child, DW_AT_bit_offset))
+            if (dwarf_hasattr_integrate (&child, DW_AT_bit_offset)
+		|| dwarf_hasattr_integrate (&child, DW_AT_data_bit_offset))
               recurse_bitfield (&childtype, e2, pf);
             else
               recurse (&childtype, e2, pf);
@@ -3747,7 +3767,7 @@ dwarf_pretty_print::print_chars (Dwarf_Die* start_type, target_symbol* e,
       return false;
     }
 
-  string function = userspace_p ? "user_string_quoted" : "kernel_string_quoted";
+  string function = userspace_p ? "user_string_quoted" : "kernel_or_user_string_quoted";
   Dwarf_Word size = (Dwarf_Word) -1;
   dwarf_formudata (dwarf_attr_integrate (&type, DW_AT_byte_size, &attr), &size);
   switch (size)
@@ -3929,6 +3949,10 @@ synthetic_embedded_deref_call(dwflpp& dw, location_context &ctx,
                      dwarf_diename (function_type) ?: "<anonymous>",
                      dwarf_errmsg (-1)), e->tok));
         }
+      if (byte_size > 8)
+            throw (SEMANTIC_ERROR
+                   ("cannot process >64-bit values", e->tok));
+        
       if (encoding == DW_ATE_float
 	  && byte_size == 4)
 	{
@@ -4716,6 +4740,14 @@ dwarf_var_expanding_visitor::visit_target_symbol (target_symbol *e)
 	q.dw.literal_stmt_for_local (ctx, getscopes(e), e->sym_name(),
 				     ctx.e, lvalue, &endtype);
 
+      // Now that have location information check if change to variable has any effect
+      if (lvalue) {
+	      if (liveness(q.sess, e, q.dw.mod_info->elf_path, addr, ctx) < 0) {
+		      q.sess.print_warning(_F("write at %p will have no effect",
+					      (void *)addr), e->tok);
+	      }
+      }
+
       q.dw.sess.globals.insert(q.dw.sess.globals.end(),
                               ctx.globals.begin(),
                               ctx.globals.end());
@@ -4762,8 +4794,16 @@ dwarf_var_expanding_visitor::visit_cast_op (cast_op *e)
 {
   // Fill in our current module context if needed
   if (e->module.empty())
-    e->module = q.dw.module_name;
-
+    {
+      // Backward compatibility for @cast() ops, sans module string,
+      // which expanded to "kernel" rather than to the current
+      // function/probe context.
+      if (strverscmp(sess.compatible.c_str(), "4.3") < 0)
+        e->module = "kernel";
+      else
+        e->module = q.dw.module_name;
+    }
+  
   var_expanding_visitor::visit_cast_op(e);
 }
 
@@ -5178,6 +5218,13 @@ exp_type_dwarf::expand(autocast_op* e, bool lvalue)
 }
 
 
+void exp_type_dwarf::print(ostream& o) const
+{
+  o << "dwarf=" << dwarf_type_name((Dwarf_Die*) & die);
+}
+
+
+
 struct dwarf_atvar_expanding_visitor: public var_expanding_visitor
 {
   dwarf_builder& db;
@@ -5359,7 +5406,7 @@ dwarf_atvar_expanding_visitor::visit_atvar_op (atvar_op* e)
 
 
 void
-dwarf_derived_probe::printsig (ostream& o, bool nest) const
+dwarf_derived_probe::printsig (ostream& o) const
 {
   // Instead of just printing the plain locations, we add a PC value
   // as a comment as a way of telling e.g. apart multiple inlined
@@ -5371,10 +5418,19 @@ dwarf_derived_probe::printsig (ostream& o, bool nest) const
   else
     o << " /* pc=" << section << "+0x" << hex << addr << dec << " */";
 
-  if (nest)
-    printsig_nested (o);
+  printsig_nested (o);
 }
 
+
+void
+dwarf_derived_probe::printsig_nonest (ostream& o) const
+{
+  sole_location()->print (o);
+  if (symbol_name != "")
+    o << " /* pc=<" << symbol_name << "+" << offset << "> */";
+  else
+    o << " /* pc=" << section << "+0x" << hex << addr << dec << " */";
+}
 
 
 void
@@ -6343,7 +6399,7 @@ generic_kprobe_derived_probe_group::emit_module_decls (systemtap_session& s)
   s.op->newline() << "if (entry)";
   s.op->newline(1) << "SET_REG_IP(regs, (unsigned long) get_kretprobe(inst)->kp.addr);";
   s.op->newline(-1) << "else";
-  s.op->newline(1) << "SET_REG_IP(regs, (unsigned long)inst->ret_addr);";
+  s.op->newline(1) << "SET_REG_IP(regs, (unsigned long) _stp_ret_addr_r(inst));";
   s.op->newline(-1) << "(sp->ph) (c);";
   s.op->newline() << "SET_REG_IP(regs, kprobes_ip);";
   s.op->newline(-1) << "}";
@@ -6516,6 +6572,7 @@ struct sdt_uprobe_var_expanding_visitor: public var_expanding_visitor
   void visit_target_symbol (target_symbol* e);
   unsigned get_target_symbol_argno_and_validate (target_symbol* e);
   long parse_out_arg_precision(string& asmarg);
+  char parse_out_arg_type(string& asmarg);
   expression* try_parse_arg_literal (target_symbol *e,
                                      const string& asmarg,
                                      long precision);
@@ -6582,6 +6639,12 @@ sdt_uprobe_var_expanding_visitor::build_dwarf_registers ()
     DRI ("%r15", 15, DI); DRI ("%r15d", 15, SI); DRI ("%r15w", 15, HI);
        DRI ("%r15b", 15, QI);
     DRI ("%rip", 16, DI); DRI ("%eip", 16, SI); DRI ("%ip", 16, HI);
+    DRI ("%xmm0", 17, DI); DRI ("%xmm1", 18, DI);  DRI ("%xmm2", 19, DI); DRI ("%xmm3", 20, DI);
+    DRI ("%xmm4", 21, DI); DRI ("%xmm5", 22, DI);  DRI ("%xmm6", 23, DI); DRI ("%xmm7", 24, DI);
+    DRI ("%xmm8", 25, DI); DRI ("%xmm9", 26, DI);  DRI ("%xmm10", 27, DI); DRI ("%xmm11", 28, DI);
+    DRI ("%xmm12", 29, DI); DRI ("%xmm13", 30, DI);  DRI ("%xmm14", 31, DI); DRI ("%xmm15", 32, DI);
+    DRI ("%st0", 33, DI); DRI ("%st1", 34, DI);  DRI ("%st2", 35, DI); DRI ("%st3", 36, DI);
+    DRI ("%st4", 37, DI); DRI ("%st5", 38, DI);  DRI ("%st6", 39, DI); DRI ("%st7", 40, DI);    
   } else if (elf_machine == EM_386) {
     DRI ("%eax", 0, SI); DRI ("%ax", 0, HI); DRI ("%al", 0, QI);
        DRI ("%ah", 0, QIh);
@@ -6678,7 +6741,23 @@ sdt_uprobe_var_expanding_visitor::build_dwarf_registers ()
     DRI ("%r13", 13, DI);
     DRI ("%r14", 14, DI);
     DRI ("%r15", 15, DI);
-  } else if (elf_machine == EM_ARM) {
+    DRI ("%f0", 16, DI);
+    DRI ("%f1", 17, DI);
+    DRI ("%f2", 18, DI);
+    DRI ("%f3", 19, DI);
+    DRI ("%f4", 20, DI);
+    DRI ("%f5", 21, DI);
+    DRI ("%f6", 22, DI);
+    DRI ("%f7", 23, DI);
+    DRI ("%f8", 24, DI);
+    DRI ("%f9", 25, DI);
+    DRI ("%f10", 26, DI);
+    DRI ("%f11", 27, DI);
+    DRI ("%f12", 28, DI);
+    DRI ("%f13", 29, DI);
+    DRI ("%f14", 30, DI);
+    DRI ("%f15", 31, DI);
+} else if (elf_machine == EM_ARM) {
     DRI ("r0", 0, SI);
     DRI ("r1", 1, SI);
     DRI ("r2", 2, SI);
@@ -6728,6 +6807,51 @@ sdt_uprobe_var_expanding_visitor::build_dwarf_registers ()
     DRI ("x29", 29, DI); DRI ("w29", 29, SI);
     DRI ("x30", 30, DI); DRI ("w30", 30, SI);
     DRI ("sp", 31, DI);
+    DRI ("v0", 64, DI); DRI ("v1", 65, DI);  DRI ("v2", 66, DI); DRI ("v3", 67, DI);
+    DRI ("v4", 68, DI); DRI ("v5", 69, DI);  DRI ("v6", 70, DI); DRI ("v7", 71, DI);
+    DRI ("v8", 72, DI); DRI ("v9", 73, DI);  DRI ("v10", 74, DI); DRI ("v11", 75, DI);
+    DRI ("v12", 76, DI); DRI ("v13", 77, DI);  DRI ("v14", 78, DI); DRI ("v15", 79, DI);
+    DRI ("v16", 80, DI); DRI ("v17", 81, DI);  DRI ("v18", 82, DI); DRI ("v19", 83, DI);
+    DRI ("v20", 84, DI); DRI ("v21", 85, DI);  DRI ("v22", 86, DI); DRI ("v23", 87, DI);
+    DRI ("v24", 88, DI); DRI ("25", 89, DI);  DRI ("v26", 90, DI); DRI ("v27", 91, DI);
+    DRI ("v28", 92, DI); DRI ("v29", 93, DI);  DRI ("v30", 94, DI); DRI ("v31", 95, DI);
+  } else if (elf_machine == EM_RISCV) {
+    Dwarf_Addr bias;
+    Elf* elf = (dwfl_module_getelf (dw.mod_info->mod, &bias));
+    enum regwidths riscv_reg_width =
+        (gelf_getclass (elf) == ELFCLASS32) ? SI : DI;
+    DRI ("x0", 0, riscv_reg_width); DRI ("zero", 0, riscv_reg_width);
+    DRI ("x1", 1, riscv_reg_width); DRI ("ra", 1, riscv_reg_width);
+    DRI ("x2", 2, riscv_reg_width); DRI ("sp", 2, riscv_reg_width);
+    DRI ("x3", 3, riscv_reg_width); DRI ("gp", 3, riscv_reg_width);
+    DRI ("x4", 4, riscv_reg_width); DRI ("tp", 4, riscv_reg_width);
+    DRI ("x5", 5, riscv_reg_width); DRI ("t0", 5, riscv_reg_width);
+    DRI ("x6", 6, riscv_reg_width); DRI ("t1", 6, riscv_reg_width);
+    DRI ("x7", 7, riscv_reg_width); DRI ("t2", 7, riscv_reg_width);
+    DRI ("x8", 8, riscv_reg_width); DRI ("s0", 8, riscv_reg_width); DRI ("fp", 8, riscv_reg_width);
+    DRI ("x9", 9, riscv_reg_width); DRI ("s1", 9, riscv_reg_width);
+    DRI ("x10", 10, riscv_reg_width); DRI ("a0", 10, riscv_reg_width);
+    DRI ("x11", 11, riscv_reg_width); DRI ("a1", 11, riscv_reg_width);
+    DRI ("x12", 12, riscv_reg_width); DRI ("a2", 12, riscv_reg_width);
+    DRI ("x13", 13, riscv_reg_width); DRI ("a3", 13, riscv_reg_width);
+    DRI ("x14", 14, riscv_reg_width); DRI ("a4", 14, riscv_reg_width);
+    DRI ("x15", 15, riscv_reg_width); DRI ("a5", 15, riscv_reg_width);
+    DRI ("x16", 16, riscv_reg_width); DRI ("a6", 16, riscv_reg_width);
+    DRI ("x17", 17, riscv_reg_width); DRI ("a7", 17, riscv_reg_width);
+    DRI ("x18", 18, riscv_reg_width); DRI ("s2", 18, riscv_reg_width);
+    DRI ("x19", 19, riscv_reg_width); DRI ("s3", 19, riscv_reg_width);
+    DRI ("x20", 20, riscv_reg_width); DRI ("s4", 20, riscv_reg_width);
+    DRI ("x21", 21, riscv_reg_width); DRI ("s5", 21, riscv_reg_width);
+    DRI ("x22", 22, riscv_reg_width); DRI ("s6", 22, riscv_reg_width);
+    DRI ("x23", 23, riscv_reg_width); DRI ("s7", 23, riscv_reg_width);
+    DRI ("x24", 24, riscv_reg_width); DRI ("s8", 24, riscv_reg_width);
+    DRI ("x25", 25, riscv_reg_width); DRI ("s9", 25, riscv_reg_width);
+    DRI ("x26", 26, riscv_reg_width); DRI ("s10", 26, riscv_reg_width);
+    DRI ("x27", 27, riscv_reg_width); DRI ("s11", 27, riscv_reg_width);
+    DRI ("x28", 28, riscv_reg_width); DRI ("t3", 28, riscv_reg_width);
+    DRI ("x29", 29, riscv_reg_width); DRI ("t4", 29, riscv_reg_width);
+    DRI ("x30", 30, riscv_reg_width); DRI ("t5", 30, riscv_reg_width);
+    DRI ("x31", 31, riscv_reg_width); DRI ("t6", 31, riscv_reg_width);
   } else if (elf_machine == EM_MIPS) {
     Dwarf_Addr bias;
     Elf* elf = (dwfl_module_getelf (dw.mod_info->mod, &bias));
@@ -6922,8 +7046,9 @@ sdt_uprobe_var_expanding_visitor::parse_out_arg_precision(string& asmarg)
   long precision;
   if (asmarg.find('@') != string::npos)
     {
-      precision = lex_cast<int>(asmarg.substr(0, asmarg.find('@')));
-      asmarg = asmarg.substr(asmarg.find('@')+1);
+      long at_or_type = asmarg.find_first_of("@f");
+      precision = lex_cast<int>(asmarg.substr(0, at_or_type));
+      asmarg = asmarg.substr(at_or_type);
     }
   else
     {
@@ -6935,6 +7060,21 @@ sdt_uprobe_var_expanding_visitor::parse_out_arg_precision(string& asmarg)
         precision = -sizeof(long);
     }
   return precision;
+}
+
+char
+sdt_uprobe_var_expanding_visitor::parse_out_arg_type(string& asmarg)
+{
+  // Reference: __builtin_classify_type
+  char type;
+  if (asmarg.find('@') != string::npos)
+    {
+      type = asmarg[0];
+      asmarg = asmarg.substr(asmarg.find('@')+1);
+    }
+  else
+    type = 'i';
+  return type;
 }
 
 expression*
@@ -7002,7 +7142,8 @@ sdt_uprobe_var_expanding_visitor::try_parse_arg_register (target_symbol *e,
   // NB: Because PR11821, we must use percent_regnames here.
   string regexp;
   if (elf_machine == EM_PPC || elf_machine == EM_PPC64
-     || elf_machine == EM_ARM || elf_machine == EM_AARCH64)
+     || elf_machine == EM_ARM || elf_machine == EM_AARCH64
+     || elf_machine == EM_RISCV)
     regexp = "^(" + regnames + ")$";
   else
     regexp = "^(" + percent_regnames + ")$";
@@ -7385,11 +7526,14 @@ sdt_uprobe_var_expanding_visitor::visit_target_symbol_arg (target_symbol *e)
       // arm    #N      rR  [rR]     [rR, #N]
       // arm64  N       rR  [rR]     [rR, N]
       // mips   N       $r           N($r)
+      // riscv  N       r            N(r)
 
       expression* argexpr = 0; // filled in in case of successful parse
 
       // Parse (and remove from asmarg) the leading length
       long precision = parse_out_arg_precision(asmarg);
+      char type __attribute__ ((unused));
+      type = parse_out_arg_type(asmarg);
 
       try
         {
@@ -10230,7 +10374,7 @@ struct kprobe_derived_probe: public generic_kprobe_derived_probe
   string path;
   string library;
   bool access_var;
-  void printsig (std::ostream &o, bool nest=true) const;
+  void printsig (std::ostream &o) const;
   void join_group (systemtap_session& s);
 };
 
@@ -10359,13 +10503,11 @@ kprobe_derived_probe::kprobe_derived_probe (systemtap_session& sess,
   this->sole_location()->components = comps;
 }
 
-void kprobe_derived_probe::printsig (ostream& o, bool nest) const
+void kprobe_derived_probe::printsig (ostream& o) const
 {
   sole_location()->print (o);
   o << " /* " << " name = " << symbol_name << "*/";
-
-  if (nest)
-    printsig_nested (o);
+  printsig_nested (o);
 }
 
 void kprobe_derived_probe::join_group (systemtap_session& s)
@@ -10592,7 +10734,7 @@ struct hwbkpt_derived_probe: public derived_probe
   string symbol_name;
   unsigned int hwbkpt_access,hwbkpt_len;
 
-  void printsig (std::ostream &o, bool nest) const;
+  void printsig (std::ostream &o) const;
   void join_group (systemtap_session& s);
 };
 
@@ -10659,12 +10801,10 @@ hwbkpt_derived_probe::hwbkpt_derived_probe (probe *base,
   this->sole_location()->components = comps;
 }
 
-void hwbkpt_derived_probe::printsig (ostream& o, bool nest) const
+void hwbkpt_derived_probe::printsig (ostream& o) const
 {
   sole_location()->print (o);
-
-  if (nest)
-    printsig_nested (o);
+  printsig_nested (o);
 }
 
 void hwbkpt_derived_probe::join_group (systemtap_session& s)
@@ -10840,7 +10980,7 @@ hwbkpt_derived_probe_group::emit_module_init (systemtap_session& s)
   s.op->newline() << "stap_hwbkpt_ret_array[i] = 0;";
   s.op->newline(-1) << "}";
   s.op->newline() << "if (rc) {";
-  s.op->newline(1) << "_stp_warn(\"Hwbkpt probe %s: registration error %d, addr %p, name %s\", probe_point, rc, addr, hwbkpt_symbol_name);";
+  s.op->newline(1) << "_stp_warn(\"Hwbkpt probe %s: registration error [man warning::pass5] %d, addr %p, name %s\", probe_point, rc, addr, hwbkpt_symbol_name);";
   s.op->newline() << "skp->registered_p = 0;";
   s.op->newline(-1) << "}";
   s.op->newline() << " else skp->registered_p = 1;";
@@ -11931,6 +12071,13 @@ static vector<string> tracepoint_extra_decls (systemtap_session& s,
 	they_live.push_back ("#include <linux/phy.h>");
     }
 
+  if (header.find("intel_iommu") != string::npos && s.architecture != "x86_64" && s.architecture != "i386")
+    {
+      // need asm/cacheflush.h for clflush_cache_range() used in that header,
+      // but this function does not exist on e.g. ppc
+      they_live.push_back ("#error nope");
+    }
+
   if (header.find("wbt") != string::npos)
     {
       // blk-wbt.h gets included as "../../../block/blk-wbt.h", so we
@@ -12226,14 +12373,15 @@ tracepoint_derived_probe_group::emit_module_init (systemtap_session &s)
   s.op->newline(-1) << "}";
   s.op->newline(-1) << "}";
 
-  // This would be technically proper (on those autoconf-detectable
-  // kernels that include this function in tracepoint.h), however we
-  // already make several calls to synchronze_sched() during our
-  // shutdown processes.
+  // Modern kernels' tracepoint implementation makes use of SRCU and
+  // their tracepoint_synchronize_unregister() function calls
+  // synchronize_srcu(&tracepoint_srcu) right before calling synchronize_rcu().
+  // So it's safer to always call tracepoint_synchronize_unregister() to avoid
+  // any risks.
 
-  // s.op->newline() << "if (rc)";
-  // s.op->newline(1) << "tracepoint_synchronize_unregister();";
-  // s.op->indent(-1);
+  s.op->newline() << "if (rc)";
+  s.op->newline(1) << "tracepoint_synchronize_unregister();";
+  s.op->indent(-1);
 }
 
 
@@ -12248,9 +12396,8 @@ tracepoint_derived_probe_group::emit_module_exit (systemtap_session& s)
   s.op->newline(1) << "stap_tracepoint_probes[i].unreg();";
   s.op->indent(-1);
 
-  // Not necessary: see above.
-
-  // s.op->newline() << "tracepoint_synchronize_unregister();";
+  // This is necessary: see above.
+  s.op->newline() << "tracepoint_synchronize_unregister();";
 }
 
 
@@ -12458,7 +12605,7 @@ tracepoint_query::handle_query_type(Dwarf_Die * type)
   if (!dwarf_hasattr(type, DW_AT_name))
     return DWARF_CB_OK;
 
-  std::string name(dwarf_diename(type));
+  std::string name(dwarf_diename(type) ?: "<unknown type>");
 
   if (!dw.function_name_matches_pattern(name, "stapprobe_" + tracepoint)
       || startswith(name, "stapprobe_template_"))
@@ -13111,6 +13258,7 @@ all_session_groups(systemtap_session& s)
   // unregister (actually run) end probes after every other probe type
   // has be unregistered.  To do the latter,
   // c_unparser::emit_module_exit() will run this list backwards.
+  DOONE(vma_tracker);
   DOONE(be);
   DOONE(generic_kprobe);
   DOONE(uprobe);

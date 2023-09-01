@@ -21,6 +21,29 @@ static inline bool atomic_try_cmpxchg(atomic_t *v, int *old, int new)
 }
 #endif
 
+#ifndef STAPCONF_HLIST_ADD_TAIL_RCU
+// Added in linux 4.7, backported to rhel 7, not present in rhel 6
+#define hlist_first_rcu(head)   (*((struct hlist_node __rcu **)(&(head)->first)))
+#define hlist_next_rcu(node)    (*((struct hlist_node __rcu **)(&(node)->next)))
+
+static inline void hlist_add_tail_rcu(struct hlist_node *n,
+					   struct hlist_head *h)
+{
+  struct hlist_node *i, *last = NULL;
+  
+  for (i = hlist_first_rcu(h); i; i = hlist_next_rcu(i))
+    last = i;
+  
+  if (last) {
+    n->next = last->next;
+    n->pprev = &last->next;
+    rcu_assign_pointer(hlist_next_rcu(last), n);
+  } else {
+    hlist_add_head_rcu(n, h);
+  }
+}
+#endif
+
 #ifndef STAPCONF_ATOMIC_FETCH_ADD_UNLESS
 static inline int atomic_fetch_add_unless(atomic_t *v, int a, int u)
 {
@@ -54,7 +77,7 @@ struct __stp_tf_vma_entry {
 	struct task_struct *tsk;
 	unsigned long vm_start;
 	unsigned long vm_end;
-	unsigned long offset;
+	unsigned long offset;  //offset from base addr of the module
 	char path[TASK_FINDER_VMA_ENTRY_PATHLEN]; /* mmpath name, if known */
 
 	// User data (possibly stp_module)
@@ -243,7 +266,7 @@ stap_add_vma_map_info(struct task_struct *tsk, unsigned long vm_start,
 	}
 
 	stp_spin_lock_irqsave(&bucket->lock, flags);
-	hlist_add_head_rcu(&entry->hlist, &bucket->head);
+	hlist_add_tail_rcu(&entry->hlist, &bucket->head);
 	stp_spin_unlock_irqrestore(&bucket->lock, flags);
 	return 0;
 }
@@ -303,7 +326,7 @@ stap_find_vma_map_info(struct task_struct *tsk, unsigned long addr,
 
 	bucket = __stp_tf_get_vma_bucket(tsk);
 	entry = __stp_tf_get_vma_map(bucket, tsk, 1, addr >= entry->vm_start &&
-				     addr < entry->vm_end);
+				     addr <= entry->vm_end);
 	if (!entry)
 		return -ESRCH;
 
@@ -397,8 +420,23 @@ stap_find_exe_file(struct mm_struct* mm)
 	// still use our own code. The original get_mm_exe_file() can
 	// sleep (since it calls down_read()), so we'll have to roll
 	// our own.
-#if defined(STAPCONF_DPATH_PATH) && (LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0))
+	//
+	// Some old kernels have the above kernel commit backported, in which
+	// case it's preferable to make use of the RCU optimization to avoid the
+	// failure-prone down_read_trylock(). The commit that adds the RCU
+	// optimization also adds a get_file_rcu() macro, so we can just check
+	// for the existence of that on kernels < 4.1. A false negative this way
+	// just leads to using the down_read_trylock() fallback as usual.
+#if defined(get_file_rcu) || LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0)
+#ifdef STAPCONF_GET_MM_EXE_FILE_EXPORTED
 	return get_mm_exe_file(mm);
+#else
+        typedef typeof(&get_mm_exe_file) get_mm_exe_file_fn;
+        if (kallsyms_get_mm_exe_file == NULL)
+          return NULL; /* can't happen; _stp_handle_start would abort before this point */
+        else
+          return (* (get_mm_exe_file_fn) kallsyms_get_mm_exe_file)(mm);
+#endif
 #else
 	struct file *exe_file = NULL;
 

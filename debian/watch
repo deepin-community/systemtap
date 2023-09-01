@@ -1,3 +1,3 @@
 version=3
 opts=pgpsigurlmangle=s/$/.asc/ \
-https://sourceware.org/systemtap/ftp/releases/ systemtap-(.*)\.tar.gz debian uupdate
+https://sourceware.org/ftp/systemtap/releases/ systemtap-(.*)\.tar.gz debian uupdate

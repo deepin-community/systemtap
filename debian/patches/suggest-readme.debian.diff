@@ -1,9 +1,11 @@
 Description: suggest README.Debian if stap fails, many users don't know this even though they should
 Author: Timo Juhani Lindfors <timo.lindfors@iki.fi>
 Forwarded: not-needed
---- a/main.cxx
-+++ b/main.cxx
-@@ -1432,6 +1432,8 @@
+Index: systemtap/main.cxx
+===================================================================
+--- systemtap.orig/main.cxx
++++ systemtap/main.cxx
+@@ -1592,6 +1592,8 @@ main (int argc, char * const argv [])
      cleanup (s, rc);
  
      assert_no_interrupts();

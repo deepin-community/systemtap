@@ -52,6 +52,9 @@ override_dh_auto_install:
 	# Install stap-prep
 	install -D stap-prep $(CURDIR)/debian/tmp/usr/bin/stap-prep
 
+	# Install man page for stap-profile-annotate
+	install -m 644 -D man/stap-profile-annotate.1.in debian/tmp/usr/share/man/man1/stap-profile-annotate.1
+
 	# Make all examples not executable. Some of them could be, but
 	# this is not consistently enforced.
 	find debian/tmp/usr/share/doc/systemtap*/examples/ -type f -executable | xargs --no-run-if-empty chmod -x

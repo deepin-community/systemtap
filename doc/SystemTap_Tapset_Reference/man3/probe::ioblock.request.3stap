@@ -2,12 +2,12 @@
 .\"     Title: probe::ioblock.request
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: May 2021
+.\"      Date: November 2022
 .\"    Manual: IO Scheduler and block IO Tapset
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::IOBLOCK\&.REQ" "3stap" "May 2021" "SystemTap Tapset Reference" "IO Scheduler and block IO Taps"
+.TH "PROBE::IOBLOCK\&.REQ" "3stap" "November 2022" "SystemTap Tapset Reference" "IO Scheduler and block IO Taps"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -36,6 +36,21 @@ ioblock\&.request
 .fi
 .SH "VALUES"
 .PP
+\fIbdev\fR
+.RS 4
+target block device
+.RE
+.PP
+\fIvcnt\fR
+.RS 4
+bio vector count which represents number of array element (page, offset, length) which make up this I/O request
+.RE
+.PP
+\fIphys_segments\fR
+.RS 4
+number of segments in this bio after physical address coalescing is performed
+.RE
+.PP
 \fIbdev_contains\fR
 .RS 4
 points to the device object which contains the partition (when bio structure represents a partition)
@@ -46,14 +61,14 @@ points to the device object which contains the partition (when bio structure rep
 i\-node number of the mapped file
 .RE
 .PP
+\fIsize\fR
+.RS 4
+total size in bytes
+.RE
+.PP
 \fIopf\fR
 .RS 4
 operations and flags
-.RE
-.PP
-\fIvcnt\fR
-.RS 4
-bio vector count which represents number of array element (page, offset, length) which make up this I/O request
 .RE
 .PP
 \fIdevname\fR
@@ -66,34 +81,14 @@ block device name
 name of the probe point
 .RE
 .PP
-\fIbdev\fR
-.RS 4
-target block device
-.RE
-.PP
-\fIhw_segments\fR
-.RS 4
-number of segments after physical and DMA remapping hardware coalescing is performed
-.RE
-.PP
-\fIsector\fR
-.RS 4
-beginning sector for the entire bio
-.RE
-.PP
 \fIidx\fR
 .RS 4
 offset into the bio vector array
 .RE
 .PP
-\fIphys_segments\fR
+\fIflags\fR
 .RS 4
-number of segments in this bio after physical address coalescing is performed
-.RE
-.PP
-\fIp_start_sect\fR
-.RS 4
-points to the start sector of the partition structure of the device
+see below BIO_UPTODATE 0 ok after I/O completion BIO_RW_BLOCK 1 RW_AHEAD set, and read/write would block BIO_EOF 2 out\-out\-bounds error BIO_SEG_VALID 3 nr_hw_seg valid BIO_CLONED 4 doesn\*(Aqt own data BIO_BOUNCED 5 bio is a bounce bio BIO_USER_MAPPED 6 contains user pages BIO_EOPNOTSUPP 7 not supported
 .RE
 .PP
 \fIrw\fR
@@ -101,14 +96,19 @@ points to the start sector of the partition structure of the device
 binary trace for read/write request
 .RE
 .PP
-\fIsize\fR
+\fIp_start_sect\fR
 .RS 4
-total size in bytes
+points to the start sector of the partition structure of the device
 .RE
 .PP
-\fIflags\fR
+\fIsector\fR
 .RS 4
-see below BIO_UPTODATE 0 ok after I/O completion BIO_RW_BLOCK 1 RW_AHEAD set, and read/write would block BIO_EOF 2 out\-out\-bounds error BIO_SEG_VALID 3 nr_hw_seg valid BIO_CLONED 4 doesn\*(Aqt own data BIO_BOUNCED 5 bio is a bounce bio BIO_USER_MAPPED 6 contains user pages BIO_EOPNOTSUPP 7 not supported
+beginning sector for the entire bio
+.RE
+.PP
+\fIhw_segments\fR
+.RS 4
+number of segments after physical and DMA remapping hardware coalescing is performed
 .RE
 .SH "CONTEXT"
 .PP

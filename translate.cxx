@@ -183,6 +183,7 @@ struct c_unparser: public unparser, public visitor
   virtual string c_localname (const string& e, bool mangle_oldstyle = false);
   virtual string c_globalname (const string &e);
   virtual string c_funcname (const string &e);
+  virtual string c_funcname (const string &e, bool &funcname_shortened);
 
   string c_arg_define (const string& e);
   string c_arg_undef (const string& e);
@@ -300,8 +301,8 @@ struct c_tmpcounter cxx_final: public c_unparser
   // var_declare(), which will forward to the parent c_unparser for output;
   void var_declare(string const&, var const& v) cxx_override;
 
-  void emit_function (functiondecl* fd);
-  void emit_probe (derived_probe* dp);
+  void emit_function (functiondecl* fd) cxx_override;
+  void emit_probe (derived_probe* dp) cxx_override;
 
   const string& get_compiled_printf (bool print_to_stream,
 				     const string& format) cxx_override;
@@ -1755,7 +1756,11 @@ c_unparser::emit_global_init_type (vardecl *v)
 void
 c_unparser::emit_functionsig (functiondecl* v)
 {
-  o->newline() << "static void " << c_funcname(v->name)
+  bool funcname_shortened;
+  string funcname = c_funcname (v->name, funcname_shortened);
+  if (funcname_shortened)
+    o->newline() << "/* " << v->name << " */";
+  o->newline() << "static void " << funcname
 	       << " (struct context * __restrict__ c);";
 }
 
@@ -2062,7 +2067,7 @@ c_unparser::emit_module_init ()
       // If a probe types's emit_module_init() wants to handle error
       // messages itself, it should set probe_point to NULL, 
       o->newline(1) << "if (probe_point)";
-      o->newline(1) << "_stp_error (\"probe %s registration error (rc %d)\", probe_point, rc);";
+      o->newline(1) << "_stp_error (\"probe %s registration error [man warning::pass5] (rc %d)\", probe_point, rc);";
       o->indent(-1);
       // NB: we need to be in the error state so timers can shutdown cleanly,
       // and so end probes don't run.  OTOH, error probes can run.
@@ -2167,6 +2172,10 @@ c_unparser::emit_module_init ()
 
   // Free up the context memory after an error too
   o->newline() << "_stp_runtime_contexts_free();";
+
+  // Free up any timing Stats in case STP_TIMING was used
+  if (!session->runtime_usermode_p())
+    o->newline() << "stp_session_exit();";
 
   o->newline() << "return rc;";
   o->newline(-1) << "}\n";
@@ -2520,7 +2529,11 @@ c_tmpcounter::emit_function (functiondecl* fd)
   // indent the dummy output as if we were already in a block
   this->o->indent (1);
 
-  o->newline() << "struct " << c_funcname (fd->name) << "_locals {";
+  bool funcname_shortened;
+  string funcname = c_funcname (fd->name, funcname_shortened);
+  if (funcname_shortened)
+    o->newline() << "/* " << fd->name << " */";
+  o->newline() << "struct " << funcname << "_locals {";
   o->indent(1);
 
   for (unsigned j=0; j<fd->locals.size(); j++)
@@ -2615,7 +2628,11 @@ c_unparser::emit_function (functiondecl* v)
   this->action_counter = 0;
   this->already_checked_action_count = false;
 
-  o->newline() << "static void " << c_funcname (v->name)
+  bool funcname_shortened;
+  string funcname = c_funcname (v->name, funcname_shortened);
+  if (funcname_shortened)
+    o->newline() << "/* " << v->name << " */";
+  o->newline() << "static void " << funcname
             << " (struct context* __restrict__ c) {";
   o->indent(1);
 
@@ -3385,11 +3402,45 @@ c_unparser::c_globalname (const string& e)
 
 
 string
+c_unparser::c_funcname (const string& e, bool& funcname_shortened)
+{
+  const string function_prefix = "function_";
+  // This matches MAX_NAME_LEN in linux objtool/elf.c used by kbuild
+  // The kernel objtool used by kbuild has a hardcoded function length limit
+  const unsigned max_name_len = 128;
+  // Add padding to allow for gcc function attribute suffixes like constprop or cold
+  const unsigned func_attr_suffix_padding = 32;
+  // XXX uncomment to test custom mangling:
+  // return function_prefix + e + "_" + lex_cast(do_hash(e.c_str()));
+
+  if (e.length() > max_name_len - function_prefix.length() - func_attr_suffix_padding)
+    {
+      long function_index = 0;
+      for (map<string,functiondecl*>::iterator it = session->functions.begin();
+          it != session->functions.end(); it++)
+        {
+          if (it->first == e)
+            {
+              funcname_shortened = true;
+              return function_prefix + lex_cast (function_index);
+            }
+          function_index += 1;
+        }
+        throw SEMANTIC_ERROR (_("unresolved symbol: ") + e); // should not happen
+    }
+  else
+    {
+      funcname_shortened = false;
+      return function_prefix + e;
+    }
+}
+
+
+string
 c_unparser::c_funcname (const string& e)
 {
-  // XXX uncomment to test custom mangling:
-  // return "function_" + e + "_" + lex_cast(do_hash(e.c_str()));
-  return "function_" + e;
+  bool funcname_shortened;
+  return c_funcname (e, funcname_shortened);
 }
 
 
@@ -7094,9 +7145,9 @@ static int
 skippable_arch_symbol (GElf_Half e_machine, const char *name, GElf_Sym *sym)
 {
   /* Filter out ARM mapping symbols */
-  if (e_machine == EM_ARM
+  if ((e_machine == EM_ARM || e_machine == EM_AARCH64)
       && GELF_ST_TYPE (sym->st_info) == STT_NOTYPE
-      && (! strcmp(name, "$a") || ! strcmp(name, "$t")
+      && (! strcmp(name, "$a") || ! strcmp(name, "$t") || ! strcmp(name, "$x")
 	  || ! strcmp(name, "$t.x") || ! strcmp(name, "$d")
 	  || ! strcmp(name, "$v") || ! strcmp(name, "$d.realdata")))
     return 1;

@@ -5,7 +5,7 @@ Maintainer: Emanuele Rocca <ema@debian.org>
 Uploaders: Timo Juhani Lindfors <timo.lindfors@iki.fi>,
            Vincent Bernat <bernat@debian.org>,
            Ritesh Raj Sarraf <rrs@debian.org>
-Build-Depends: debhelper (>= 12),
+Build-Depends: debhelper (>= 13),
                gettext (>= 0.19.4),
                libelf-dev (>= 0.148),
                libdw-dev (>= 0.148),
@@ -22,7 +22,7 @@ Build-Depends: debhelper (>= 12),
                python3-lxml,
                latex2html,
                libavahi-client-dev
-Standards-Version: 4.4.1
+Standards-Version: 4.6.0
 Homepage: http://sourceware.org/systemtap/
 Vcs-Git: https://salsa.debian.org/debian/systemtap.git
 Vcs-Browser: https://salsa.debian.org/debian/systemtap.git
@@ -30,7 +30,7 @@ Vcs-Browser: https://salsa.debian.org/debian/systemtap.git
 Package: systemtap
 Architecture: linux-any
 Depends: systemtap-runtime (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends},
- systemtap-common (= ${binary:Version}), make, lsb-release
+ systemtap-common (= ${binary:Version}), make, lsb-release, python3
 Suggests: systemtap-doc, vim-addon-manager
 Description: instrumentation system for Linux
  SystemTap provides infrastructure to simplify the gathering of

@@ -36,6 +36,8 @@ struct unwind_frame_info
 #include "arm64.h"
 #elif defined (__mips__)
 #include "mips.h"
+#elif defined (__riscv)
+#include "riscv.h"
 #else
 #error "Unsupported dwarf unwind architecture"
 #endif
@@ -154,13 +156,13 @@ static unsigned long read_ptr_sect(const u8 **pLoc, const void *end,
 				value = _stp_get_unaligned(ptr.p32u++);
 			break;
 		}
-		/* fallthrough */
+                fallthrough;
 	case DW_EH_PE_data8:
 		BUILD_BUG_ON(sizeof(u64) != sizeof(value));
 #else
 		BUILD_BUG_ON(sizeof(u32) != sizeof(value));
 #endif
-		/* fallthrough */
+                fallthrough;
 	case DW_EH_PE_absptr:
 		if (compat_task)
 		{
