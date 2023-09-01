@@ -1,3 +1,9 @@
+systemtap (4.8-2deepin1) unstable; urgency=medium
+
+  * Add sunway support. (rebased)
+
+ -- Miao Changwei <miaochangwei@uniontech.com>  Wed, 30 Aug 2023 16:22:40 +0800
+
 systemtap (4.8-2) unstable; urgency=medium
 
   * Add d/patches/dtrace-deterministic-tmpfile.diff by Gioele Barabucci to
