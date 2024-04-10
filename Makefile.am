@@ -2,7 +2,7 @@
 ## process this file with automake to produce Makefile.in
 
 # we don't maintain a ChangeLog, which makes us non-GNU -> foreign
-AUTOMAKE_OPTIONS = no-dist foreign
+AUTOMAKE_OPTIONS = no-dist foreign subdir-objects
 
 pkglibexecdir = ${libexecdir}/${PACKAGE}
 oldincludedir = ${includedir}/sys
@@ -47,20 +47,29 @@ stap_SOURCES = main.cxx session.cxx \
 	tapsets.cxx buildrun.cxx loc2stap.cxx hash.cxx mdfour.c \
 	cache.cxx util.cxx coveragedb.cxx dwarf_wrappers.cxx \
 	tapset-been.cxx tapset-procfs.cxx tapset-timers.cxx tapset-netfilter.cxx \
-	tapset-perfmon.cxx tapset-mark.cxx tapset-itrace.cxx \
+	tapset-perfmon.cxx tapset-mark.cxx \
 	tapset-utrace.cxx task_finder.cxx dwflpp.cxx rpm_finder.cxx \
 	setupdwfl.cxx remote.cxx privilege.cxx cmdline.cxx \
 	tapset-dynprobe.cxx tapset-method.cxx translator-output.cxx \
         stapregex.cxx stapregex-tree.cxx stapregex-parse.cxx \
 	stapregex-dfa.cxx stringtable.cxx tapset-python.cxx \
-	analysis.cxx
+	tapset-debuginfod.cxx analysis.cxx
 noinst_HEADERS = sdt_types.h
-stap_LDADD = @stap_LIBS@ @sqlite3_LIBS@ @LIBINTL@ -lpthread @debuginfod_LIBS@ @DYNINST_LDFLAGS@ @DYNINST_LIBS@
+stap_LDADD = @stap_LIBS@ @sqlite3_LIBS@ @LIBINTL@ -lpthread @debuginfod_LDFLAGS@ @debuginfod_LIBS@ @DYNINST_LDFLAGS@ @DYNINST_LIBS@
 stap_DEPENDENCIES =
+
+if HAVE_LANGUAGE_SERVER_SUPPORT
+stap_SOURCES += language-server/stap-language-server.cxx \
+	language-server/stap-code-completion.cxx language-server/jsonrpc.cxx
+endif
 
 if HAVE_LIBREADLINE
 stap_SOURCES += interactive.cxx
 stap_LDADD += @READLINE_LIBS@
+endif
+
+if HAVE_JSON_C
+stap_LDADD += $(jsonc_LIBS)
 endif
 
 if HAVE_BPF_DECLS
@@ -128,7 +137,7 @@ cscope:
 PHONIES =
 if BUILD_TRANSLATOR
 stap_CFLAGS = $(AM_CFLAGS) @PIECFLAGS@
-stap_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ @ALIGNEDNEW@
+stap_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ @ALIGNEDNEW@ @debuginfod_CFLAGS@
 stap_CPPFLAGS = $(AM_CPPFLAGS) -DSTAP_SDT_V2
 stap_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@ @BOOST_SYSTEM_LIB@
 
@@ -331,7 +340,7 @@ if BUILD_SERVER
 	rm -f $(DESTDIR)$(localstatedir)/log/stap-server/log
 endif
 
-SUBDIRS = . java python stapdyn staprun stapbpf doc man po httpd stap-exporter
+SUBDIRS = . java python stapdyn staprun stapbpf doc man po httpd stap-exporter interactive-notebook
 # NB: the gcov target above uses this to enumarate linked binaries' build directories
 DIST_SUBDIRS = testsuite $(SUBDIRS)
 EXTRA_DIST = m4/ChangeLog

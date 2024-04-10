@@ -388,7 +388,7 @@ With \-o option, run staprun in background as a daemon and show its pid.
 Sets the maximum size of output file and the maximum number of output files.
 If the size of output file will exceed
 .B size
-, systemtap switches output file to the next file. And if the number of
+megabytes, systemtap switches output file to the next file. And if the number of
 output files exceed
 .B N
 , systemtap removes the oldest output file. You can omit the second argument.
@@ -872,6 +872,11 @@ manual page.
 This option is used to disable the automatic logging of unused global
 variables at the end of a stap session.
 
+.TP
+.B \-\-language\-server
+Language server mode. Start a language server which will communicate via
+stdio. The language server will respect stap verbosity.
+
 .SH ARGUMENTS
 
 Any additional arguments on the command line are passed to the script
@@ -1059,7 +1064,7 @@ conditional expressions will be macroexpanded regardless of how the
 condition is evaluated. This can sometimes lead to errors:
 .SAMPLE
 // The following results in a conflict:
-%( CONFIG_UTRACE == "y" %?
+%( CONFIG_UPROBE == "y" %?
     @define foo %( process.syscall %)
 %:
     @define foo %( **ERROR** %)
@@ -1067,7 +1072,7 @@ condition is evaluated. This can sometimes lead to errors:
 
 // The following works properly as expected:
 @define foo %(
-  %( CONFIG_UTRACE == "y" %? process.syscall %: **ERROR** %)
+  %( CONFIG_UPROBE == "y" %? process.syscall %: **ERROR** %)
 %)
 .ESAMPLE
 The first example is incorrect because both @defines are evaluated in

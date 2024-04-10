@@ -76,6 +76,8 @@ struct semantic_error;
 struct module_cache;
 struct update_visitor;
 struct compile_server_cache;
+class language_server;
+struct typeresolution_info;
 
 // XXX: a generalized form of this descriptor could be associated with
 // a vardecl instead of out here at the systemtap_session level.
@@ -156,6 +158,7 @@ public:
   int  parse_cmdline (int argc, char * const argv []);
   bool parse_cmdline_runtime (const std::string& opt_runtime);
   std::string version_string ();
+  std::pair <std::string,std::string> kernel_version_range();
   void version ();
   void usage (int exitcode);
   void check_options (int argc, char * const argv []);
@@ -464,6 +467,9 @@ public:
 
   const token* last_token;
 
+  // Used during the -semantic pass- for tabulating still-unresolved counts
+  typeresolution_info* type_res_info;
+
   void print_token (std::ostream& o, const token* tok);
   void print_error (const semantic_error& e);
   std::string build_error_msg (const semantic_error& e);
@@ -483,6 +489,9 @@ public:
   // PR25841, for early probe-derivation-time symbol resolution
   symresolution_info* symbol_resolver; // may be NULL
   
+  bool language_server_mode;
+  language_server* lang_server;
+
   // NB: It is very important for all of the above (and below) fields
   // to be cleared in the systemtap_session ctor (session.cxx).
 

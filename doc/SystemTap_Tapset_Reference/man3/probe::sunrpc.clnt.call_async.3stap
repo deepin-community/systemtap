@@ -2,12 +2,12 @@
 .\"     Title: probe::sunrpc.clnt.call_async
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: November 2022
+.\"      Date: November 2023
 .\"    Manual: Networking Tapset
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::SUNRPC\&.CLNT" "3stap" "November 2022" "SystemTap Tapset Reference" "Networking Tapset"
+.TH "PROBE::SUNRPC\&.CLNT" "3stap" "November 2023" "SystemTap Tapset Reference" "Networking Tapset"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -36,14 +36,9 @@ sunrpc\&.clnt\&.call_async
 .fi
 .SH "VALUES"
 .PP
-\fIprog\fR
+\fIprot\fR
 .RS 4
-the RPC program number
-.RE
-.PP
-\fIflags\fR
-.RS 4
-flags
+the IP protocol number
 .RE
 .PP
 \fIvers\fR
@@ -51,9 +46,14 @@ flags
 the RPC program version number
 .RE
 .PP
-\fIprot\fR
+\fIprogname\fR
 .RS 4
-the IP protocol number
+the RPC program name
+.RE
+.PP
+\fIprog\fR
+.RS 4
+the RPC program number
 .RE
 .PP
 \fIport\fR
@@ -66,16 +66,6 @@ the port number
 whether this client is abandoned
 .RE
 .PP
-\fIprocname\fR
-.RS 4
-the procedure name in this RPC call
-.RE
-.PP
-\fIproc\fR
-.RS 4
-the procedure number in this RPC call
-.RE
-.PP
 \fIxid\fR
 .RS 4
 current transmission id
@@ -86,9 +76,19 @@ current transmission id
 the server machine name
 .RE
 .PP
-\fIprogname\fR
+\fIflags\fR
 .RS 4
-the RPC program name
+flags
+.RE
+.PP
+\fIproc\fR
+.RS 4
+the procedure number in this RPC call
+.RE
+.PP
+\fIprocname\fR
+.RS 4
+the procedure name in this RPC call
 .RE
 .SH SEE ALSO\n 
 .IR tapset::rpc (3stap)

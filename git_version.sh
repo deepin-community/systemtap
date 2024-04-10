@@ -218,12 +218,12 @@ if [ "x$git_repo_dir" != "x" ]; then #
             git_errors="${git_errors+${git_errors}; }error running '$GIT log --oneline'"
         fi
         # Grab the "pretty" revision number
-        git_pretty_rev=`$GIT describe --dirty --broken --always --abbrev=8`
+        git_pretty_rev=`$GIT describe --dirty --always --abbrev=8`
         if [ "x$git_shaid" = "x" ]; then
             git_errors="${git_errors+${git_errors}; }error running '$GIT describe'"
         fi
         # Grab the commit timestamp
-        git_timestamp=`$GIT show --no-show-signature -s --format=%ct`
+        git_timestamp=`$GIT show -s --format=%ct | tail -1`
         if [ "x$git_timestamp" = "x" ]; then
             git_errors="${git_errors+${git_errors}; }error running '$GIT show -s --format=%ct'"
         fi

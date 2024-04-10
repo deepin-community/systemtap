@@ -118,6 +118,9 @@ make_any_make_cmd(systemtap_session& s, const string& dir, const string& target)
 
       // linux 5.11 wants btf but no, baby, no
       "CONFIG_DEBUG_INFO_BTF_MODULES=",
+
+      // PR30716: work around objtool stac/clac warning
+      "CONFIG_HAVE_UACCESS_VALIDATION=",
       
       // RHBZ1321628: suppress stack validation; expected to be temporary
       // "CONFIG_STACK_VALIDATION=",
@@ -143,6 +146,10 @@ make_any_make_cmd(systemtap_session& s, const string& dir, const string& target)
   if (s.architecture != "powerpc" ||
       (strverscmp (s.kernel_base_release.c_str(), "2.6.15") >= 0))
     make_cmd.push_back("ARCH=" + s.architecture); // need make-quoting?
+
+  // PR29837: Suppress the kernel version warning
+  make_cmd.push_back("CC_VERSION_TEXT=foo");
+  make_cmd.push_back("CONFIG_CC_VERSION_TEXT=foo");
 
   // Add any custom kbuild flags
   make_cmd.insert(make_cmd.end(), s.kbuildflags.begin(), s.kbuildflags.end());
@@ -305,7 +312,7 @@ compile_pass (systemtap_session& s)
   o << "stap_check_gcc = $(shell " << superverbose
     << " if $(CC) $(1) -S -o /dev/null -xc /dev/null > /dev/null 2>&1; then "
     << "echo \"$(1)\"; else echo \"$(2)\"; fi)" << endl;
-  o << "CHECK_BUILD := $(CC) $(NOSTDINC_FLAGS) $(KBUILD_CPPFLAGS) $(CPPFLAGS) "
+  o << "CHECK_BUILD := $(CC) -DMODULE $(NOSTDINC_FLAGS) $(KBUILD_CPPFLAGS) $(CPPFLAGS) "
     << "$(LINUXINCLUDE) $(_KBUILD_CFLAGS) $(CFLAGS_KERNEL) $(EXTRA_CFLAGS) "
     << "$(CFLAGS) -DKBUILD_BASENAME=\\\"" << s.module_name << "\\\" "
     << WERROR << " -S -o /dev/null -xc " << endl;
@@ -348,6 +355,7 @@ compile_pass (systemtap_session& s)
 
   vector<string> cs;  // to hold autoconf C file names
 
+  output_autoconf(s, o, cs, "autoconf-d-real-inode.c", "STAPCONF_D_REAL_INODE", NULL);
   output_autoconf(s, o, cs, "autoconf-hrtimer-rel.c", "STAPCONF_HRTIMER_REL", NULL);
   output_exportconf(s, o2, "hrtimer_get_res", "STAPCONF_HRTIMER_GET_RES");
   output_autoconf(s, o, cs, "autoconf-generated-compile.c", "STAPCONF_GENERATED_COMPILE", NULL);
@@ -381,8 +389,6 @@ compile_pass (systemtap_session& s)
   output_autoconf(s, o, cs, "autoconf-grsecurity.c", "STAPCONF_GRSECURITY", NULL);
   output_autoconf(s, o, cs, "autoconf-trace-printk.c", "STAPCONF_TRACE_PRINTK", NULL);
   output_autoconf(s, o, cs, "autoconf-regset.c", "STAPCONF_REGSET", NULL);
-  output_autoconf(s, o, cs, "autoconf-utrace-regset.c", "STAPCONF_UTRACE_REGSET", NULL);
-  output_autoconf(s, o, cs, "autoconf-uprobe-get-pc.c", "STAPCONF_UPROBE_GET_PC", NULL);
   output_autoconf(s, o, cs, "autoconf-hlist-4args.c", "STAPCONF_HLIST_4ARGS", NULL);
   output_autoconf(s, o, cs, "autoconf-get-kretprobe.c", "STAPCONF_GET_KRETPROBE", NULL);
   output_exportconf(s, o2, "tsc_khz", "STAPCONF_TSC_KHZ");
@@ -395,6 +401,8 @@ compile_pass (systemtap_session& s)
   output_autoconf(s, o, cs, "autoconf-hw_breakpoint_context.c",
 		  "STAPCONF_HW_BREAKPOINT_CONTEXT", NULL);
   output_exportconf(s, o2, "save_stack_trace_regs", "STAPCONF_SAVE_STACK_TRACE_REGS_EXPORTED");
+  output_autoconf(s, o, cs, "autoconf-stacktrace_h.c",
+                  "STAPCONF_STACKTRACE_H", NULL);
   output_autoconf(s, o, cs, "autoconf-save-stack-trace.c",
                   "STAPCONF_KERNEL_STACKTRACE", NULL);
   output_autoconf(s, o, cs, "autoconf-save-stack-trace-no-bp.c",
@@ -417,6 +425,7 @@ compile_pass (systemtap_session& s)
                   "STAPCONF_STACKTRACE_OPS_INT_ADDRESS", NULL);
   output_autoconf(s, o, cs, "autoconf-mm-context-vdso.c", "STAPCONF_MM_CONTEXT_VDSO", NULL);
   output_autoconf(s, o, cs, "autoconf-mm-context-vdso-base.c", "STAPCONF_MM_CONTEXT_VDSO_BASE", NULL);
+  output_autoconf(s, o, cs, "autoconf-genhd.c", "STAPCONF_GENHD_H", NULL);
   output_autoconf(s, o, cs, "autoconf-blk-types.c", "STAPCONF_BLK_TYPES", NULL);
   output_autoconf(s, o, cs, "autoconf-perf-structpid.c", "STAPCONF_PERF_STRUCTPID", NULL);
   output_autoconf(s, o, cs, "perf_event_counter_context.c",
@@ -435,6 +444,7 @@ compile_pass (systemtap_session& s)
   output_autoconf(s, o, cs, "autoconf-kernel_read-new-args.c", "STAPCONF_KERNEL_READ_NEW_ARGS", NULL);
   output_autoconf(s, o, cs, "autoconf-utrace-via-tracepoints.c", "STAPCONF_UTRACE_VIA_TRACEPOINTS", NULL);
   output_autoconf(s, o, cs, "autoconf-task_work-struct.c", "STAPCONF_TASK_WORK_STRUCT", NULL);
+  output_autoconf(s, o, cs, "autoconf-twa_resume.c", "STAPCONF_TWA_RESUME", NULL);
   output_autoconf(s, o, cs, "autoconf-vm-area-pte.c", "STAPCONF_VM_AREA_PTE", NULL);
   output_autoconf(s, o, cs, "autoconf-relay-umode_t.c", "STAPCONF_RELAY_UMODE_T", NULL);
   output_autoconf(s, o, cs, "autoconf-relay_buf-per_cpu_ptr.c", "STAPCONF_RELAY_BUF_PER_CPU_PTR", NULL);
@@ -458,6 +468,14 @@ compile_pass (systemtap_session& s)
   
   // used by tapset/linux/proc_mem.stp
   output_autoconf(s, o, cs, "autoconf-mm-shmempages.c", "STAPCONF_MM_SHMEMPAGES", NULL);
+
+  // used by userland memory reads
+  output_autoconf(s, o, cs, "autoconf-nmi-uaccess-okay.c", "STAPCONF_NMI_UACCESS_OKAY", NULL);
+  output_autoconf(s, o, cs, "autoconf-asm-access-ok.c", "STAPCONF_ASM_ACCESS_OK", NULL);
+  output_autoconf(s, o, cs, "autoconf-user-access-begin-2-args.c", "STAPCONF_USER_ACCESS_BEGIN_2_ARGS", NULL);
+  output_autoconf(s, o, cs, "autoconf-user-access-begin-3-args.c", "STAPCONF_USER_ACCESS_BEGIN_3_ARGS", NULL);
+  output_autoconf(s, o, cs, "autoconf-user-access-end.c", "STAPCONF_USER_ACCESS_END", NULL);
+  output_autoconf(s, o, cs, "autoconf-asm-tlbflush-h.c", "STAPCONF_ASM_TLBFLUSH_H", NULL);
 
   // used by runtime/uprobe-inode.c
   output_either_exportconf(s, o2, "uprobe_register", "register_uprobe",
@@ -504,6 +522,8 @@ compile_pass (systemtap_session& s)
 
   output_autoconf(s, o, cs, "autoconf-module_layout.c",
 		  "STAPCONF_MODULE_LAYOUT", NULL);
+  output_autoconf(s, o, cs, "autoconf-module_memory.c",
+		  "STAPCONF_MODULE_MEMORY", NULL);
   output_autoconf(s, o, cs, "autoconf-mod_kallsyms.c",
 		  "STAPCONF_MOD_KALLSYMS", NULL);
   output_exportconf(s, o2, "get_user_pages_remote", "STAPCONF_GET_USER_PAGES_REMOTE");
@@ -517,6 +537,8 @@ compile_pass (systemtap_session& s)
 		  "STAPCONF_GET_USER_PAGES_FLAGS", NULL);
   output_autoconf(s, o, cs, "autoconf-get_user_pages-notask_struct.c",
 		  "STAPCONF_GET_USER_PAGES_NOTASK_STRUCT", NULL);
+  output_autoconf(s, o, cs, "autoconf-get_user_page_vma_remote.c",
+		  "STAPCONF_GET_USER_PAGE_VMA_REMOTE", NULL);
   output_autoconf(s, o, cs, "autoconf-bio-bi_opf.c", "STAPCONF_BIO_BI_OPF", NULL);
   output_autoconf(s, o, cs, "autoconf-linux-sched_headers.c",
 		  "STAPCONF_LINUX_SCHED_HEADERS", NULL);
@@ -578,7 +600,11 @@ compile_pass (systemtap_session& s)
   // FIXME Work around the issue with riscv kernel modules not being
   // loadable with asynchronous unwind tables due to R_RISCV_32_PCREL
   // relocations.
-  if (s.architecture != "riscv")
+  //
+  // Also: PR30396, -fcf-protection=branch & objtool --ibt on linux 6.3 causes
+  // eh_frame bad-reloc warnings from kbuild.
+  //
+  if (s.architecture != "riscv" && s.kernel_config["CONFIG_CC_HAS_IBT"] != "y")
     o << "EXTRA_CFLAGS += -fasynchronous-unwind-tables" << endl;
 
   // We used to allow the user to override default optimization when so
@@ -831,13 +857,6 @@ uprobes_pass (systemtap_session& s)
 {
   if (!s.need_uprobes || kernel_built_uprobes(s))
     return 0;
-
-  if (s.kernel_config["CONFIG_UTRACE"] != string("y"))
-    {
-      clog << _("user-space process-tracking facilities not available [man error::process-tracking]") << endl;
-      s.set_try_server ();
-      return 1;
-    }
 
   /*
    * We need to use the version of uprobes that comes with SystemTap.  Try to

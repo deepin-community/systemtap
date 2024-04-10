@@ -2,12 +2,12 @@
 .\"     Title: probe::sunrpc.clnt.shutdown_client
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: November 2022
+.\"      Date: November 2023
 .\"    Manual: Networking Tapset
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::SUNRPC\&.CLNT" "3stap" "November 2022" "SystemTap Tapset Reference" "Networking Tapset"
+.TH "PROBE::SUNRPC\&.CLNT" "3stap" "November 2023" "SystemTap Tapset Reference" "Networking Tapset"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -36,29 +36,24 @@ sunrpc\&.clnt\&.shutdown_client
 .fi
 .SH "VALUES"
 .PP
-\fIprogname\fR
+\fIrpccnt\fR
 .RS 4
-the RPC program name
+the count of RPC calls
 .RE
 .PP
-\fIom_queue\fR
+\fIom_bytes_recv\fR
 .RS 4
-the jiffies queued for xmit
+the count of bytes in
 .RE
 .PP
-\fIom_ops\fR
+\fIclones\fR
 .RS 4
-the count of operations
+the number of clones
 .RE
 .PP
 \fIservername\fR
 .RS 4
 the server machine name
-.RE
-.PP
-\fIauthflavor\fR
-.RS 4
-the authentication flavor
 .RE
 .PP
 \fItasks\fR
@@ -71,9 +66,9 @@ the number of references
 the count of reconnections
 .RE
 .PP
-\fIom_execute\fR
+\fIport\fR
 .RS 4
-the RPC execution jiffies
+the port number
 .RE
 .PP
 \fIom_ntrans\fR
@@ -81,9 +76,9 @@ the RPC execution jiffies
 the count of RPC transmissions
 .RE
 .PP
-\fIport\fR
+\fIauthflavor\fR
 .RS 4
-the port number
+the authentication flavor
 .RE
 .PP
 \fIom_bytes_sent\fR
@@ -91,29 +86,9 @@ the port number
 the count of bytes out
 .RE
 .PP
-\fIclones\fR
+\fIprogname\fR
 .RS 4
-the number of clones
-.RE
-.PP
-\fIvers\fR
-.RS 4
-the RPC program version number
-.RE
-.PP
-\fIprot\fR
-.RS 4
-the IP protocol number
-.RE
-.PP
-\fIrpccnt\fR
-.RS 4
-the count of RPC calls
-.RE
-.PP
-\fIom_bytes_recv\fR
-.RS 4
-the count of bytes in
+the RPC program name
 .RE
 .PP
 \fIprog\fR
@@ -124,6 +99,31 @@ the RPC program number
 \fIom_rtt\fR
 .RS 4
 the RPC RTT jiffies
+.RE
+.PP
+\fIom_ops\fR
+.RS 4
+the count of operations
+.RE
+.PP
+\fIprot\fR
+.RS 4
+the IP protocol number
+.RE
+.PP
+\fIom_queue\fR
+.RS 4
+the jiffies queued for xmit
+.RE
+.PP
+\fIom_execute\fR
+.RS 4
+the RPC execution jiffies
+.RE
+.PP
+\fIvers\fR
+.RS 4
+the RPC program version number
 .RE
 .SH SEE ALSO\n 
 .IR tapset::rpc (3stap)

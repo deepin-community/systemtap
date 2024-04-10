@@ -45,7 +45,7 @@
 %{!?with_sysusers: %global with_sysusers 0%{?fedora} >= 32 || 0%{?rhel} >= 9}
 
 # Virt is supported on these arches, even on el7, but it's not in core EL7
-%if 0%{?rhel} <= 7
+%if 0%{?rhel} && 0%{?rhel} <= 7
 %ifarch ppc64le aarch64
 %global with_virthost 0
 %endif
@@ -64,9 +64,6 @@
    %else
       %if 0%{?rhel} >= 6
          %define udevrulesdir /lib/udev/rules.d
-      %else
-         # RHEL5
-         %define udevrulesdir /etc/udev/rules.d
       %endif
    %endif
 %endif
@@ -83,11 +80,7 @@
     %define dracutbindir %{_bindir}
 %endif
 
-%if 0%{?rhel} == 6
-    %{!?_rpmmacrodir: %define _rpmmacrodir /etc/rpm/}
-%else
-    %{!?_rpmmacrodir: %define _rpmmacrodir %{_rpmconfigdir}/macros.d}
-%endif
+%{!?_rpmmacrodir: %define _rpmmacrodir %{_rpmconfigdir}/macros.d}
 
 # To avoid testsuite/*/*.stp has shebang which doesn't start with '/'
 %define __brp_mangle_shebangs_exclude_from .stp$
@@ -121,7 +114,8 @@ m     stapdev  stapdev
 
 
 Name: systemtap
-Version: 4.8
+# PRERELEASE
+Version: 5.0
 Release: 1%{?release_override}%{?dist}
 # for version, see also configure.ac
 
@@ -141,6 +135,7 @@ Release: 1%{?release_override}%{?dist}
 # systemtap-runtime-virtguest udev rules, init scripts/systemd service, req:-runtime
 # systemtap-runtime-python2 HelperSDT python2 module, req:-runtime
 # systemtap-runtime-python3 HelperSDT python3 module, req:-runtime
+# systemtap-jupyter      /usr/bin/stap-jupyter-* interactive-notebook req:systemtap
 #
 # Typical scenarios:
 #
@@ -154,7 +149,7 @@ Release: 1%{?release_override}%{?dist}
 # intermediary stap-server for --use-server:   systemtap-server (-devel unused)
 
 Summary: Programmable system-wide instrumentation system
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 Source: ftp://sourceware.org/pub/systemtap/releases/systemtap-%{version}.tar.gz
 
@@ -167,6 +162,7 @@ BuildRequires: pkgconfig(nss)
 BuildRequires: pkgconfig(avahi-client)
 %if %{with_debuginfod}
 BuildRequires: pkgconfig(libdebuginfod)
+BuildRequires: pkgconfig(json-c)
 %endif
 %if %{with_dyninst}
 BuildRequires: dyninst-devel >= 10.0
@@ -218,9 +214,6 @@ BuildRequires: pkgconfig(libvirt)
 BuildRequires: pkgconfig(libxml-2.0)
 %endif
 BuildRequires: readline-devel
-%if 0%{?rhel} <= 5
-BuildRequires: pkgconfig(ncurses)
-%endif
 %if %{with_python2_probes}
 BuildRequires: python2-devel
 %if 0%{?fedora} >= 1
@@ -260,7 +253,7 @@ the components needed to locally develop and execute systemtap scripts.
 
 %package server
 Summary: Instrumentation System Server
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 Requires: systemtap-devel = %{version}-%{release}
 Conflicts: systemtap-devel < %{version}-%{release}
@@ -290,7 +283,7 @@ compiles systemtap scripts to kernel objects on their demand.
 
 %package devel
 Summary: Programmable system-wide instrumentation system - development headers, tools
-License: GPLv2+
+License: GPL-2.0-or-later AND GPL-2.0-only AND BSD-3-Clause AND LGPL-2.1-only AND BSD-2-Clause
 URL: http://sourceware.org/systemtap/
 
 %if 0%{?rhel} >= 8 || 0%{?fedora} >= 20
@@ -320,7 +313,7 @@ a copy of the standard tapset library and the runtime library C files.
 
 %package runtime
 Summary: Programmable system-wide instrumentation system - runtime
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 Requires(pre): shadow-utils
 Conflicts: systemtap-devel < %{version}-%{release}
@@ -335,7 +328,7 @@ using a local or remote systemtap-devel installation.
 
 %package client
 Summary: Programmable system-wide instrumentation system - client
-License: GPLv2+
+License: GPL-2.0-or-later AND GPL-2.0-only AND BSD-3-Clause AND LGPL-2.1-only AND GFDL-1.2-or-later AND BSD-2-Clause
 URL: http://sourceware.org/systemtap/
 Requires: zip unzip
 Requires: systemtap-runtime = %{version}-%{release}
@@ -358,7 +351,7 @@ documentation, and a copy of the tapset library for reference.
 
 %package initscript
 Summary: Systemtap Initscripts
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 Requires: systemtap = %{version}-%{release}
 %if %{with_systemd}
@@ -378,7 +371,7 @@ boot-time probing if supported.
 
 %package sdt-devel
 Summary: Static probe support tools
-License: GPLv2+ and Public Domain
+License: GPL-2.0-or-later AND CC0-1.0
 URL: http://sourceware.org/systemtap/
 %if %{with_pyparsing}
 %if %{with_python3}
@@ -401,12 +394,12 @@ with the optional dtrace-compatibility preprocessor to process related
 
 %package testsuite
 Summary: Instrumentation System Testsuite
-License: GPLv2+
+License: GPL-2.0-or-later AND GPL AND GPL-2.0-only AND GPL-3.0-or-later AND MIT
 URL: http://sourceware.org/systemtap/
 Requires: systemtap = %{version}-%{release}
 Requires: systemtap-sdt-devel = %{version}-%{release}
 Requires: systemtap-server = %{version}-%{release}
-Requires: dejagnu which elfutils grep nc
+Requires: dejagnu which elfutils grep nc wget
 %if %{with_debuginfod}
 Requires: elfutils-debuginfod
 %endif
@@ -473,7 +466,7 @@ systemtap on the current system.
 %if %{with_java}
 %package runtime-java
 Summary: Systemtap Java Runtime Support
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 Requires: systemtap-runtime = %{version}-%{release}
 # work around fedora ci gating kvetching about i686<->x86-64 conflicts
@@ -495,7 +488,7 @@ that probe Java processes running on the OpenJDK runtimes using Byteman.
 %if %{with_python2_probes}
 %package runtime-python2
 Summary: Systemtap Python 2 Runtime Support
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 Requires: systemtap-runtime = %{version}-%{release}
 
@@ -507,7 +500,7 @@ that probe python 2 processes.
 %if %{with_python3_probes}
 %package runtime-python3
 Summary: Systemtap Python 3 Runtime Support
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 Requires: systemtap-runtime = %{version}-%{release}
 
@@ -524,7 +517,7 @@ that probe python 3 processes.
 %if %{with_python3_probes}
 %package exporter
 Summary: Systemtap-prometheus interoperation mechanism
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 Requires: systemtap-runtime = %{version}-%{release}
 
@@ -537,7 +530,7 @@ to remote requesters on demand.
 %if %{with_virthost}
 %package runtime-virthost
 Summary: Systemtap Cross-VM Instrumentation - host
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 # only require libvirt-libs really
 #Requires: libvirt >= 1.0.2
@@ -552,7 +545,7 @@ connection.
 %if %{with_virtguest}
 %package runtime-virtguest
 Summary: Systemtap Cross-VM Instrumentation - guest
-License: GPLv2+
+License: GPL-2.0-or-later
 URL: http://sourceware.org/systemtap/
 Requires: systemtap-runtime = %{version}-%{release}
 %if %{with_systemd}
@@ -570,6 +563,18 @@ This package installs the services necessary on a virtual machine for a
 systemtap-runtime-virthost machine to execute systemtap scripts.
 %endif
 
+%if %{with_python3} && %{with_monitor}
+%package jupyter
+Summary: ISystemtap jupyter kernel and examples
+License: GPL-2.0-or-later
+URL: http://sourceware.org/systemtap/
+Requires: systemtap = %{version}-%{release}
+
+%description jupyter
+This package includes files needed to build and run
+the interactive systemtap Jupyter kernel, either locally
+or within a container.
+%endif
 # ------------------------------------------------------------------------
 
 %prep
@@ -1275,6 +1280,15 @@ exit 0
 %{_sbindir}/stap-exporter
 %endif
 
+%if %{with_python3} && %{with_monitor}
+%files jupyter
+%{_bindir}/stap-jupyter-container
+%{_bindir}/stap-jupyter-install
+%{_mandir}/man1/stap-jupyter.1*
+%dir %{_datadir}/systemtap
+%{_datadir}/systemtap/interactive-notebook
+%endif
+
 # ------------------------------------------------------------------------
 
 # Future new-release entries should be of the form
@@ -1284,10 +1298,18 @@ exit 0
 
 # PRERELEASE
 %changelog
-* Thu Nov 03 2022 Serhei Makarov <serhei@serhei.io> - 4.8-1
+* Fri Nov 03 2023 Frank Ch. Eigler <fche@redhat.com> - 5.0-1
 - Upstream release, see wiki page below for detailed notes.
   https://sourceware.org/systemtap/wiki/SystemTapReleases
 
+* Fri Apr 28 2023 Frank Ch. Eigler <fche@redhat.com> - 4.9-1
+- Upstream release, see wiki page below for detailed notes.
+  https://sourceware.org/systemtap/wiki/SystemTapReleases
+
+* Thu Nov 03 2022 Serhei Makarov <serhei@serhei.io> - 4.8-1
+- Upstream release, see wiki page below for detailed notes.
+  https://sourceware.org/systemtap/wiki/SystemTapReleases
+  
 * Mon May 02 2022 Frank Ch. Eigler <fche@redhat.com> - 4.7-1
 - Upstream release, see wiki page below for detailed notes.
   https://sourceware.org/systemtap/wiki/SystemTapReleases

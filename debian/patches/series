@@ -3,5 +3,3 @@ suggest-readme.debian.diff
 dtrace-no-std-include-path.diff
 stap-prep.patch
 systemtap-ia64.patch
-dtrace-deterministic-tmpfile.diff
-Add-sunway-support.patch

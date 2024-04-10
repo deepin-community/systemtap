@@ -103,7 +103,8 @@ systemtap_session::systemtap_session ():
   warningerr_count(0),
   target_namespaces_pid(0),
   suppress_costly_diagnostics(0),
-  last_token (0)
+  last_token (0),
+  type_res_info (0)
 {
   struct utsname buf;
   (void) uname (& buf);
@@ -191,6 +192,8 @@ systemtap_session::systemtap_session ():
   timeout = 0;
   use_bpf_raw_tracepoint = false;
   symbol_resolver = 0;
+  lang_server = 0;
+  language_server_mode = false;
 
   // PR12443: put compiled-in / -I paths in front, to be preferred during 
   // tapset duplicate-file elimination
@@ -305,6 +308,7 @@ systemtap_session::systemtap_session (const systemtap_session& other,
   target_namespaces_pid(0),
   suppress_costly_diagnostics(0),
   last_token (0),
+  type_res_info (0),
   symbol_resolver (0)
 {
   release = kernel_release = kern;
@@ -381,6 +385,8 @@ systemtap_session::systemtap_session (const systemtap_session& other,
   no_global_var_display = other.no_global_var_display;
   pass_1a_complete = other.pass_1a_complete;
   timeout = other.timeout;
+  language_server_mode = other.language_server_mode;
+  lang_server = other.lang_server;
   // don't bother copy typequery_memo
 
   include_path = other.include_path;
@@ -492,14 +498,22 @@ systemtap_session::version_string ()
   return string (VERSION) + "/" + elfutils_version2 + ", " + STAP_EXTENDED_VERSION;
 }
 
+
+pair <string,string>
+systemtap_session::kernel_version_range()
+{
+  return make_pair<string,string>("2.6.32", "6.6-rc1");    // PRERELEASE
+}
+
 void
 systemtap_session::version ()
 {
   cout << _F("Systemtap translator/driver (version %s)\n"
-             "Copyright (C) 2005-2022 Red Hat, Inc. and others\n"   // PRERELEASE
+             "Copyright (C) 2005-2023 Red Hat, Inc. and others\n"   // PRERELEASE
              "This is free software; see the source for copying conditions.\n",
              version_string().c_str());
-  cout << _F("tested kernel versions: %s ... %s\n", "2.6.32", "6.1.0-rc3");   // PRERELEASE
+  auto vr = kernel_version_range();
+  cout << _F("tested kernel versions: %s ... %s\n", vr.first.c_str(), vr.second.c_str());
   
   cout << _("enabled features:")
 #ifdef HAVE_AVAHI
@@ -549,6 +563,15 @@ systemtap_session::version ()
 #endif
 #ifdef HAVE_MONITOR_LIBS
        << " MONITOR_LIBS"
+#endif
+#ifdef HAVE_JSON_C
+       << " JSON_C"
+#endif
+#ifdef HAVE_LIBDEBUGINFOD
+       << " LIBDEBUGINFOD" 
+#endif
+#ifdef METADATA_QUERY_ENABLED
+       << " METADATA"
 #endif
        << endl;
 }
@@ -729,6 +752,10 @@ systemtap_session::usage (int exitcode)
 #if HAVE_MONITOR_LIBS
     "   --monitor=INTERVAL\n"
     "              enables runtime interactive monitoring\n"
+#endif
+#if HAVE_JSON_C && HAVE_LANGUAGE_SERVER_SUPPORT
+     "   --language-server\n"
+     "              starts a systemtap language server\n"
 #endif
     , compatible.c_str()) << endl
   ;
@@ -1679,6 +1706,10 @@ systemtap_session::parse_cmdline (int argc, char * const argv [])
 	  no_global_var_display = true;
 	  break;
 
+  case LONG_OPT_LANGUAGE_SERVER:
+    language_server_mode = true;
+    break;
+
 	case '?':
 	  // Invalid/unrecognized option given or argument required, but
 	  // not given. In both cases getopt_long() will have printed the
@@ -1789,10 +1820,10 @@ systemtap_session::check_options (int argc, char * const argv [])
         args.push_back (string (argv[i]));
     }
 
-  // We don't need a script with --list-servers, --trust-servers, or any dump mode
+  // We don't need a script with --list-servers, --trust-servers, or any dump mode, or a lang-server
   bool need_script = server_status_strings.empty () &&
                      server_trust_spec.empty () &&
-                     !dump_mode && !interactive_mode;
+                     !dump_mode && !interactive_mode && !language_server_mode;
 
   if (benchmark_sdt_loops > 0 || benchmark_sdt_threads > 0)
     {
@@ -1835,13 +1866,18 @@ systemtap_session::check_options (int argc, char * const argv [])
       cerr << _("Cannot specify -i with -l/-L/--dump-* switches.") << endl;
       usage(1);
     }
+  if (dump_mode && language_server_mode)
+    {
+      cerr << _("Cannot specify --language-server with -l/-L/--dump-* switches.") << endl;
+      usage(1);
+    }
   if (dump_mode && monitor)
     {
       cerr << _("Cannot specify --monitor with -l/-L/--dump-* switches.") << endl;
       usage(1);
     }
   // FIXME: we need to think through other options that shouldn't be
-  // used with '-i'.
+  // used with '-i' and '--language-server'.
 
   // ignore any -E bits in list modes; their presence could flip the
   // process result code even if list results are empty
@@ -1869,6 +1905,14 @@ systemtap_session::check_options (int argc, char * const argv [])
   if (monitor)
     {
       print_warning("Monitor mode is not supported by this version of systemtap");
+      exit(1);
+    }
+#endif
+
+#if ! HAVE_JSON_C || ! HAVE_LANGUAGE_SERVER_SUPPORT
+  if (language_server_mode)
+    {
+      print_warning("Language server mode is not supported by this version of systemtap");
       exit(1);
     }
 #endif
@@ -2094,10 +2138,6 @@ systemtap_session::parse_kernel_exports ()
       if (tokens.size() == 4 &&
           tokens[2] == "vmlinux" &&
           tokens[3].substr(0,13) == string("EXPORT_SYMBOL"))
-        kernel_exports.insert (tokens[1]);
-      // RHEL4 Module.symvers file only has 3 tokens.  No
-      // 'EXPORT_SYMBOL' token at the end of the line.
-      else if (tokens.size() == 3 && tokens[2] == "vmlinux")
         kernel_exports.insert (tokens[1]);
     }
   if (verbose > 2)

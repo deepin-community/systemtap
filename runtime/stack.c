@@ -31,8 +31,6 @@
 #include "sym.c"
 #include "regs.h"
 
-#include "linux/uprobes-inc.h"
-
 #include <linux/stacktrace.h>
 
 #if defined(STAPCONF_KERNEL_STACKTRACE) || defined(STAPCONF_KERNEL_STACKTRACE_NO_BP)
@@ -139,7 +137,7 @@ static void print_stack_address(void *data, unsigned long addr, int reliable)
 	else if (sdata->levels > 0) {
 		_stp_print_addr(addr,
 				sdata->flags | (reliable ? 0 :_STP_SYM_INEXACT),
-				NULL);
+				NULL, NULL);
 		sdata->levels--;
 	}
 #ifdef STAPCONF_STACKTRACE_OPS_INT_ADDRESS
@@ -190,17 +188,18 @@ static void _stp_stack_print_fallback(struct context *c, unsigned long sp,
 #if defined(STAPCONF_STACK_TRACE_SAVE_REGS) /* linux 5.2+ apprx. */
 	if (!stack_trace_save_regs_fn) {
 		dbug_unwind(1, "no fallback kernel stacktrace (giving up)\n");
-		_stp_print_addr(0, sym_flags | _STP_SYM_INEXACT, NULL);
+		_stp_print_addr(0, sym_flags | _STP_SYM_INEXACT, NULL, c);
 		return;
 	}
 
-        num_entries = (*stack_trace_save_regs_fn)(regs, &entries[0], MAXBACKTRACE, skip);
+        num_entries = ibt_wrapper(unsigned int,
+				  (*stack_trace_save_regs_fn)(regs, &entries[0], MAXBACKTRACE, skip));
 #else
 	struct stack_trace trace;
 	/* If don't have save_stack_trace_regs unwinder, just give up. */
 	if (!save_stack_trace_regs_fn) {
 		dbug_unwind(1, "no fallback kernel stacktrace (giving up)\n");
-		_stp_print_addr(0, sym_flags | _STP_SYM_INEXACT, NULL);
+		_stp_print_addr(0, sym_flags | _STP_SYM_INEXACT, NULL, c);
 		return;
 	}
 
@@ -223,10 +222,10 @@ static void _stp_stack_print_fallback(struct context *c, unsigned long sp,
 		/* When we have frame pointers, the unwind addresses can be
 		   (mostly) trusted, otherwise it is all guesswork.  */
 #ifdef CONFIG_FRAME_POINTER
-		_stp_print_addr((unsigned long) entries[i], sym_flags, NULL);
+		_stp_print_addr((unsigned long) entries[i], sym_flags, NULL, c);
 #else
 		_stp_print_addr((unsigned long) entries[i], sym_flags | _STP_SYM_INEXACT,
-				NULL);
+				NULL, c);
 #endif
 	}
 }
@@ -444,28 +443,37 @@ static void _stp_stack_kernel_print(struct context *c, int sym_flags)
 {
 	unsigned n, remaining;
 	unsigned long l;
+	bool print_addr_seen = 0;
 
 	/* print the current address */
 	if (c->probe_type == stp_probe_type_kretprobe && c->ips.krp.pi
 	    && (sym_flags & _STP_SYM_FULL) == _STP_SYM_FULL) {
 		_stp_print("Returning from: ");
 		_stp_print_addr((unsigned long)_stp_probe_addr_r(c->ips.krp.pi),
-				sym_flags, NULL);
+				sym_flags, NULL, c);
 		_stp_print("Returning to  : ");
 	}
-	_stp_print_addr(_stp_stack_kernel_get(c, 0), sym_flags, NULL);
+	_stp_print_addr(_stp_stack_kernel_get(c, 0), sym_flags, NULL, c);
 
 #ifdef STP_USE_DWARF_UNWINDER
 	for (n = 1; n < MAXBACKTRACE; n++) {
 		l = _stp_stack_kernel_get(c, n);
 		if (l == 0) {
 			remaining = MAXBACKTRACE - n;
-			_stp_stack_print_fallback(c, UNW_SP(&c->uwcontext_kernel.info),
-						  &c->uwcontext_kernel.info.regs,
-						  sym_flags, remaining, 0);
+                        /* In case _stp_print_addr() successfully managed to do
+                         * some dwarf unwinding, there's no need to fall back to
+                         * _stp_stack_print_fallback().  Doing it might cause
+                         * duplicate output in the resulting stack trace.  The
+                         * print_addr_seen helps to prevent that.  Test covered
+                         * by backtrace.exp. */
+			if (!print_addr_seen)
+				_stp_stack_print_fallback(c, UNW_SP(&c->uwcontext_kernel.info),
+							  &c->uwcontext_kernel.info.regs,
+							  sym_flags, remaining, 0);
 			break;
 		} else {
-			_stp_print_addr(l, sym_flags, NULL);
+			_stp_print_addr(l, sym_flags, NULL, c);
+			print_addr_seen = 1;
 		}
 	}
 #else
@@ -653,19 +661,19 @@ static void _stp_stack_user_print(struct context *c, int sym_flags)
 		if ((sym_flags & _STP_SYM_FULL) == _STP_SYM_FULL) {
 			_stp_print("Returning from: ");
 			/* ... otherwise this dereference fails */
-			_stp_print_addr(ri->rp->u.vaddr, sym_flags, current);
+			_stp_print_addr(ri->rp->u.vaddr, sym_flags, current, c);
 			_stp_print("Returning to  : ");
 		}
 	}
 #endif
-	_stp_print_addr(_stp_stack_user_get(c, 0), sym_flags, current);
+	_stp_print_addr(_stp_stack_user_get(c, 0), sym_flags, current, c);
 
 	/* print rest of stack... */
 #ifdef STP_USE_DWARF_UNWINDER
 	for (n = 1; n < MAXBACKTRACE; n++) {
 		l = _stp_stack_user_get(c, n);
 		if (l == 0) break; // No user space fallback available
-		_stp_print_addr(l, sym_flags, current);
+		_stp_print_addr(l, sym_flags, current, c);
 	}
 #else
 	/* User stack traces only supported for arches with dwarf unwinder. */
@@ -674,6 +682,19 @@ static void _stp_stack_user_print(struct context *c, int sym_flags)
 	else
 		_stp_print("\n");
 #endif
+}
+
+static void __stp_sprint_begin(struct _stp_log *log)
+{
+	__stp_print_flush(log);
+	log->no_flush = true;
+}
+
+static void __stp_sprint_end(struct _stp_log *log)
+{
+	log->no_flush = false;
+	log->is_full = false;
+	log->len = 0;
 }
 
 /** Writes stack backtrace to a string
@@ -700,12 +721,12 @@ static void _stp_stack_kernel_sprint(char *str, int size, struct context* c,
 	}
 
 	log = per_cpu_ptr(_stp_log_pcpu, raw_smp_processor_id());
-	__stp_print_flush(log);
+	__stp_sprint_begin(log);
 	_stp_stack_kernel_print(c, sym_flags);
 	bytes = min_t(int, size - 1, log->len);
 	memcpy(str, log->buf, bytes);
 	str[bytes] = '\0';
-	log->len = 0;
+	__stp_sprint_end(log);
 	_stp_print_unlock_irqrestore(&flags);
 }
 
@@ -727,12 +748,12 @@ static void _stp_stack_user_sprint(char *str, int size, struct context* c,
 	}
 
 	log = per_cpu_ptr(_stp_log_pcpu, raw_smp_processor_id());
-	__stp_print_flush(log);
+	__stp_sprint_begin(log);
 	_stp_stack_user_print(c, sym_flags);
 	bytes = min_t(int, size - 1, log->len);
 	memcpy(str, log->buf, bytes);
 	str[bytes] = '\0';
-	log->len = 0;
+	__stp_sprint_end(log);
 	_stp_print_unlock_irqrestore(&flags);
 }
 

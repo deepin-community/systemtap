@@ -30,6 +30,10 @@
 #ifdef HAVE_LIBREADLINE
 #include "interactive.h"
 #endif
+#if HAVE_LANGUAGE_SERVER_SUPPORT
+#include "language-server/stap-language-server.h"
+#endif
+
 #include "bpf.h"
 
 #if ENABLE_NLS
@@ -179,6 +183,8 @@ printscript(systemtap_session& s, ostream& o)
                       // We want to print the probe point signature (without the nested components).
                       std::ostringstream sig;
                       p->printsig_nonest(sig);
+                      if (s.verbose > 1)
+                        p->printsig_nested(sig);                        
 
                       if (s.dump_mode == systemtap_session::dump_matched_probes_vars && isatty(STDOUT_FILENO))
                         o << s.colorize(sig.str(), "source");
@@ -1186,8 +1192,10 @@ passes_0_4 (systemtap_session &s)
 		  s.mok_fingerprints.clear();
 		  s.mok_fingerprints.push_back(mok_fingerprint);
 		}
-	      rc =
-		sign_module (s.tmpdir, s.module_filename(), s.mok_fingerprints, mok_path, s.kernel_build_tree);
+              if (s.verbose)
+                clog << _F("Signing %s with mok key %s", s.module_filename().c_str(), mok_path.c_str())
+                     << endl;
+	      rc = sign_module (s.tmpdir, s.module_filename(), s.mok_fingerprints, mok_path, s.kernel_build_tree);
 	    }
 #endif
 
@@ -1291,7 +1299,20 @@ passes_0_4 (systemtap_session &s)
     }
 
   if (rc && ! s.try_server ())
-    cerr << _("Pass 4: compilation failed.  [man error::pass4]") << endl;
+    {
+      cerr << _("Pass 4: compilation failed.  [man error::pass4]") << endl;
+      if (s.runtime_mode == systemtap_session::kernel_runtime)
+        {
+          // PR30858: report kernel version support
+          auto x = s.kernel_version_range();
+          bool outside = (strverscmp (x.first.c_str(), s.kernel_base_release.c_str()) > 0 ||
+                          strverscmp (x.second.c_str(), s.kernel_base_release.c_str()) < 0);
+          cerr << _F("Kernel version %s is %s tested range %s ... %s\n",
+                     s.kernel_base_release.c_str(),
+                     outside ? "outside" : "within",
+                     x.first.c_str(), x.second.c_str());
+        }
+    }
   else
     {
       // Update cache. Cache cleaning is kicked off at the
@@ -1306,8 +1327,30 @@ passes_0_4 (systemtap_session &s)
       if (! s.use_script_cache && s.last_pass <= 4)
         s.save_module = true;
 
+#if HAVE_NSS
+      // PR30749
+      if (!rc && s.module_sign_given)
+        {
+          // when run on client as --sign-module, mok fingerprints are result of mokutil -l
+          // when run from server as --sign-module=PATH, mok fingerprint is given by PATH
+          string mok_path;
+          if (!s.module_sign_mok_path.empty())
+            {
+              string mok_fingerprint;
+              split_path (s.module_sign_mok_path, mok_path, mok_fingerprint);
+              s.mok_fingerprints.clear();
+              s.mok_fingerprints.push_back(mok_fingerprint);
+            }
+          
+          if (s.verbose)
+            clog << _F("Signing %s with mok key %s", s.module_filename().c_str(), mok_path.c_str())
+                 << endl;
+          rc = sign_module (s.tmpdir, s.module_filename(), s.mok_fingerprints, mok_path, s.kernel_build_tree);
+        }
+#endif
+      
       // Copy module to the current directory.
-      if (s.save_module && !pending_interrupts)
+      if (!rc && s.save_module && !pending_interrupts)
         {
 	  string module_src_path = s.tmpdir + "/" + s.module_filename();
 	  string module_dest_path = s.module_filename();
@@ -1323,29 +1366,11 @@ passes_0_4 (systemtap_session &s)
         }
     }
   
-#if HAVE_NSS
-  if (s.module_sign_given)
-    {
-      // when run on client as --sign-module, mok fingerprints are result of mokutil -l
-      // when run from server as --sign-module=PATH, mok fingerprint is given by PATH
-      string mok_path;
-      if (!s.module_sign_mok_path.empty())
-	{
-	  string mok_fingerprint;
-	  split_path (s.module_sign_mok_path, mok_path, mok_fingerprint);
-	  s.mok_fingerprints.clear();
-	  s.mok_fingerprints.push_back(mok_fingerprint);
-	}
-
-      rc = sign_module (s.tmpdir, s.module_filename(), s.mok_fingerprints, mok_path, s.kernel_build_tree);
-    }
-#endif
-  
   PROBE1(stap, pass4__end, &s);
 
   return rc;
 }
-
+ 
 int
 pass_5 (systemtap_session &s, vector<remote*> targets)
 {
@@ -1479,6 +1504,19 @@ main (int argc, char * const argv [])
     if (rc != 0)
       return rc;
 
+    #if HAVE_LANGUAGE_SERVER_SUPPORT
+    if(s.language_server_mode){
+      // The language server commuinicates with the client via stdio, so the systemtap verbosity should be 0
+      // It's best to keep the verbosity within the lang-server since it prevents accidental cout usage which
+      // will cause faliures (Ex. s.version() uses cout)
+      // Instead the LS verbosity should be set
+      s.lang_server = new language_server(&s, s.verbose);
+      s.verbose = 0;
+      for(int i = 0; i < 5; i++)
+        s.perpass_verbose[i] = 0;
+    }
+    #endif
+
     // Create the temp dir.
     s.create_tmp_dir();
 
@@ -1528,6 +1566,14 @@ main (int argc, char * const argv [])
     set<systemtap_session*> sessions;
     for (unsigned i = 0; i < targets.size(); ++i)
       sessions.insert(targets[i]->get_session());
+
+    #if HAVE_LANGUAGE_SERVER_SUPPORT
+    if(s.language_server_mode){
+        int r = s.lang_server->run();
+        delete s.lang_server;
+        return r;
+    }
+    #endif
 
     // FIXME: For now, only attempt local interactive use.
     if (s.interactive_mode && fake_remote)

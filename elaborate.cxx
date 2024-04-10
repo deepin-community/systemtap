@@ -92,30 +92,18 @@ derived_probe::printsig (ostream& o) const
   printsig_nested (o);
 }
 
+
 void
 derived_probe::printsig_nested (ostream& o) const
 {
-  // We'd like to enclose the probe derivation chain in a /* */
-  // comment delimiter.  But just printing /* base->printsig() */ is
-  // not enough, since base might itself be a derived_probe.  So we,
-  // er, "cleverly" encode our nesting state as a formatting flag for
-  // the ostream.
-  ios::fmtflags f = o.flags (ios::internal);
-  if (f & ios::internal)
-    {
-      // already nested
-      o << " <- ";
-      base->printsig (o);
-    }
-  else
-    {
-      // outermost nesting
-      o << " /* <- ";
-      base->printsig (o);
-      o << " */";
-    }
-  // restore flags
-  (void) o.flags (f);
+  vector<probe*> probes_list;
+  base->collect_derivation_chain(probes_list); // excluding this probe's own pp
+  o << " /* ";
+  for (auto i : probes_list) {
+    o << " <- ";
+    i->printsig (o);
+  }
+  o << " */ ";  
 }
 
 
@@ -2216,7 +2204,7 @@ void add_global_var_display (systemtap_session& s)
 	{
 	  derived_probe* dp = dps[i];
 	  s.probes.push_back (dp);
-	  dp->join_group (s);
+    dp->join_group (s);
 
           // Repopulate symbol and type info
           symresolution_info sym (s);
@@ -2302,6 +2290,35 @@ static void gen_monitor_data(systemtap_session& s)
   dp->body->visit (&sym);
 }
 
+static string monitor_mode_format_global(string name, exp_type t, int num_escape){
+  string s = "";
+  string escape(num_escape, '\\');
+
+  if (t == pe_stats){
+    /* For a stats variable v, we construct a json object of the form
+    {"@foo": @foo(v), ...}
+    */
+    string stats_vals;
+    string stats_fmt = "{";
+    static const vector<string> stats = { "@count", "@min", "@max", "@sum", "@avg" };
+    for(auto it = stats.begin(); it != stats.end(); ++it){
+      stats_vals += "(@count(" + name + ") != 0 ? " + *it + "(" + name + ")" + ": 0)";
+      stats_fmt  +=  escape + "\"" + *it + escape + "\": " + "%d";
+      if(it != stats.end()-1){
+          stats_vals += ", ";
+          stats_fmt  += ", ";
+      }
+    }
+    stats_fmt += "}";
+    s += "sprintf(\""+ stats_fmt +"\", " + stats_vals + ")";
+  }
+  else if (t == pe_string)
+    s += "sprintf(\""+escape+"\"%s"+escape+"\"\"," + name + ")";
+  else
+    s += "sprint(" + name + ")";
+  return s;
+}
+
 static void monitor_mode_read(systemtap_session& s)
 {
   if (!s.monitor) return;
@@ -2310,9 +2327,12 @@ static void monitor_mode_read(systemtap_session& s)
 
   stringstream code;
 
-  unsigned long rough_max_json_size = 100 +
-    s.globals.size() * 100 +
-    s.probes.size() * 200;
+  unsigned long total_arity = 0;
+  for(auto it_g = s.globals.cbegin(); it_g != s.globals.cend(); ++it_g)
+    total_arity += (*it_g)->arity + 1; // Each element needs some space, since an array needs more than a scalar would 
+  unsigned long rough_max_json_size = 2048 +
+    total_arity * 1024 + // Give plenty of room, since stats can get big
+    s.probes.size() * 512;
   
   code << "probe procfs(\"monitor_status\").read.maxsize(" << rough_max_json_size << ") {" << endl;
   code << "try {"; // absorb .= overflows!
@@ -2323,27 +2343,55 @@ static void monitor_mode_read(systemtap_session& s)
   code << "$value .= sprintf(\"\\\"uid\\\": \\\"%d\\\",\\n\", uid())" << endl;
   code << "$value .= sprintf(\"\\\"memory\\\": \\\"%s\\\",\\n\", module_size())" << endl;
   code << "$value .= sprintf(\"\\\"module_name\\\": \\\"%s\\\",\\n\", module_name())" << endl;
-
   code << "$value .= sprintf(\"\\\"globals\\\": {\\n\")" << endl;
   for (auto it = s.globals.cbegin(); it != s.globals.cend(); ++it)
     {
-      if ((*it)->synthetic) continue;
+      if ((*it)->synthetic || !startswith((*it)->name, "__global_")) continue;
 
       if (it != s.globals.cbegin())
         code << "$value .= sprintf(\",\\n\")" << endl;
 
       code << "$value .= sprintf(\"\\\"%s\\\":\", \"" << (*it)->unmangled_name << "\")" << endl;
-      if ((*it)->arity == 0)
-        {
-          if ((*it)->type == pe_stats)
-            code << "$value .= sprintf(\"\\\"%d(count)\\\"\", @count(" << (*it)->name << "))" << endl;
-          else if ((*it)->type == pe_string)
-            code << "$value .= string_quoted(sprintf(\"\\\"%s\\\"\"," << (*it)->name << "))" << endl;
-          else
-            code << "$value .= string_quoted(sprint(" << (*it)->name << "))" << endl;
+      if ((*it)->arity == 0) // A scalar so just map name to formatted value
+      {
+        code << "$value .= " << monitor_mode_format_global((*it)->name.to_string(), (*it)->type, 1) << endl;
+      }
+      else if ((*it)->arity > 0) // An array, which requires a bit more work
+      {
+                              // Example for array 'arr'
+        string key_str  = ""; // "arr_k1, arr_k2, ...arr_karity"
+        string fmt_str  = ""; // "%s, %s, ...%s"
+        string glbl_str = ""; // value_of(arr_k1), ..., value_of(arr_karity)
+        for(int i = 0; i < (*it)->arity; i++){
+          string k = (*it)->unmangled_name.to_string() + "_k" + to_string(i);
+          key_str  += k;
+          fmt_str  += "%s";
+          glbl_str += monitor_mode_format_global(k, (*it)->index_types[i], 3);
+          if( i != (*it)->arity-1 ){
+            key_str  += ", "; fmt_str  += ", "; glbl_str += ", "; 
+          }
         }
-      else if ((*it)->arity > 0)
-        code << "$value .= sprintf(\"\\\"[%d]\\\"\", " << (*it)->maxsize << ")" << endl;
+        /*
+        We construct (for the non-stats case)
+        foreach ( arr_value = [arr_k1, arr_k2, ...arr_karity]) in arr ){
+          str_map .= sprintf("'(%s, %s, ...%s)' : %s", value_of(arr_k1), ..., value_of(arr_karity), value_of(arr with these keys))
+        }
+
+        Stats are similar, but don't have a 'value =' part, they just maps [keys, ...] -> stats object (described above) 
+        we just 
+        */
+        code << "str_map = \"\"" << endl;
+        string value = (*it)->unmangled_name.to_string() + "_value";
+        if((*it)->type != pe_stats)
+          code << "foreach (" << value << " = [" << key_str << "] in " << (*it)->unmangled_name << " ) { str_map .= sprintf(\"\\\"("
+            << fmt_str << ")\\\" : %s, \", " << glbl_str << ", " << monitor_mode_format_global(value, (*it)->type, 1) << ") }" << endl;
+        else
+          code << "foreach ( [" << key_str << "] in " << (*it)->unmangled_name << " ) { str_map .= sprintf(\"\\\"("
+               << fmt_str << ")\\\" : %s, \", " << glbl_str << ", " << monitor_mode_format_global((*it)->unmangled_name.to_string() + '[' + key_str + "]" , (*it)->type, 1) << ") }" << endl;
+        // Ensure that the json doesn't contain partial values. It either all fits, not its skipped
+        code << "if (strlen(str_map) == 4096 - 1) { $value .= \"\\\"(MAXSTRINGLEN exceeded)\\\"\" }" << endl; //FIXME: How do I get MAXSTRINGLEN from within stap?
+        code << "else {$value .= sprintf(\"{%s}\", str_map)}" << endl;
+      }
     }
   code << "$value .= sprintf(\"\\n},\\n\")" << endl;
 
@@ -2497,7 +2545,7 @@ static void monitor_mode_write(systemtap_session& s)
 
   derived_probe* dp = dps[0];
   s.probes.push_back (dp);
-  dp->join_group (s);
+  // PR29801: NB: The probe is added to the group alongside the other synthetic derived_probe objects in semantic_pass_optimize1
 
   // Repopulate symbol info
   symresolution_info sym (s, /* omniscient-unmangled */ true);
@@ -2521,7 +2569,7 @@ static void setup_timeout(systemtap_session& s)
 
   derived_probe* dp = dps[0];
   s.probes.push_back (dp);
-  dp->join_group (s);
+  // PR29801: NB: The probe is added to the group alongside the other synthetic derived_probe objects in semantic_pass_optimize1
 
   // Repopulate symbol info
   symresolution_info sym (s);
@@ -2534,6 +2582,12 @@ int
 semantic_pass (systemtap_session& s)
 {
   int rc = 0;
+
+  /* PR30570: We track typeresolution_info within the session
+   * so that not only semantic_pass_types but also other passes have access to
+   * type resolution capabilities
+   */
+  s.type_res_info = new typeresolution_info(s);
 
   try
     {
@@ -2585,6 +2639,10 @@ semantic_pass (systemtap_session& s)
   // If we're dumping functions, only error out if no functions were found
   if (s.dump_mode == systemtap_session::dump_functions)
     rc = s.functions.empty();
+
+  // Type inference is complete
+  delete s.type_res_info;
+  s.type_res_info = NULL;
 
   return rc;
 }
@@ -3680,6 +3738,15 @@ dead_assignment_remover::visit_try_block (try_block *s)
             clog << _F("Eliding unused error string catcher %s at %s",
 		       errvar->unmangled_name.to_string().c_str(),
 		       lex_cast(*s->tok).c_str()) << endl;
+           /* PR30570: Since the unused error string is elided we assign the type of errvar (symbol)
+            * and it's referent (symboldecl) here.
+            * If this is not done then later type inference cannot determine the type as string since
+            * s->catch_error_var is removed but the referent remains (in locals)
+            */
+          if (!session.type_res_info)
+            throw SEMANTIC_ERROR(_("internal error: type_res_info is NULL"));
+          session.type_res_info->resolve(pe_string, s->catch_error_var);
+          session.type_res_info->resolve(pe_string, s->catch_error_var->referent);
           s->catch_error_var = 0;
         }
     }
@@ -3800,6 +3867,17 @@ dead_stmtexpr_remover::visit_try_block (try_block *s)
     {
       if (session.verbose>2)
         clog << _("Eliding empty try {} block ") << *s->tok << endl;
+      /* PR30570: Since the try block is elided we assign the type of s->catch_error_var and
+       * the declaration (referent) here a bit early. Since this is before type inference,
+       * if a type is inferred then that's what will be used, but if not then we'll have
+       * already set this default value
+       */
+      if (!session.type_res_info)
+            throw SEMANTIC_ERROR(_("internal error: type_res_info is NULL"));
+      if(s->catch_error_var){
+        session.type_res_info->resolve(pe_string, s->catch_error_var);
+        session.type_res_info->resolve(pe_string, s->catch_error_var->referent);
+      }
       s = 0;
     }
   provide (s);
@@ -5775,18 +5853,16 @@ semantic_pass_optimize1 (systemtap_session& s)
     {
       derived_probe* p = s.probes[i];
 
-      if (p->synthetic)
+      if (p->synthetic || s.empty_probes.find(p) == s.empty_probes.end())
         {
           non_empty_probes.push_back(p);
+          if(p->group)
+            s.print_warning(_F("Probe '%s' is already in a group, but is joining another",
+                           ((string) p->locations[0]->components[0]->functor).c_str()), p->tok);
           p->join_group(s);
         }
       else if (s.unoptimized || s.dump_mode)
         p->join_group(s);
-      else if (s.empty_probes.find(p) == s.empty_probes.end())
-        {
-          non_empty_probes.push_back(p);
-          p->join_group(s);
-        }
       else if (!s.timing && // PR10070
                !(p->base->tok->location.file->synthetic)) // don't warn for synthetic probes   
         s.print_warning(_F("Probe '%s' has been elided", 
@@ -6027,7 +6103,9 @@ semantic_pass_types (systemtap_session& s)
 
   // next pass: type inference
   unsigned iterations = 0;
-  typeresolution_info ti (s);
+  if (!s.type_res_info)
+    throw SEMANTIC_ERROR(_("internal error: type_res_info is NULL"));
+  typeresolution_info& ti = *s.type_res_info;
 
   ti.assert_resolvability = false;
   while (1)
@@ -6977,6 +7055,12 @@ typeresolution_info::visit_try_block (try_block* e)
   if (e->catch_error_var)
     {
       t = pe_string;
+      /* Try and resolve the types of the symbol and referent to be a pe_string
+       * If either was already defined elsewhere with a different type, cause
+       * a mismatching type semantic error
+       */
+      resolve(t, e->catch_error_var);
+      resolve(t, e->catch_error_var->referent);
       e->catch_error_var->visit (this);
     }
   if (e->catch_block)
@@ -7671,6 +7755,43 @@ typeresolution_info::resolve_details (const token* tok,
   dest = src;
   if (session.verbose > 4)
     clog << "resolved type details " << *dest << " to " << *tok << endl;
+}
+
+/* t  type to attempt to resolve to
+ * e  the expression to resolve
+ */
+void
+typeresolution_info::resolve(exp_type t, expression* e){
+  const token* tok = e->tok;
+
+  // The type has not been resolved yet so we can do so
+  if (pe_unknown == e->type){
+    e->type = t;
+    resolved (tok, t);
+  }
+  // The type was already resolved to a different type than
+  // what is being attempted now
+  else if (t != e->type)
+      mismatch (tok, t, e->type);
+}
+
+/* t  type to attempt to resolve to
+ * d  the symboldecl to resolve
+ */
+void
+typeresolution_info::resolve(exp_type t, symboldecl* d){
+  const token* tok = d->tok;
+
+  // The type has not been resolved yet so we can do so
+  if (pe_unknown == d->type){
+    d->type = t;
+    resolved (tok, t, d);
+  }
+
+  // The type was already resolved to a different type than
+  // what is being attempted now
+  else if (t != d->type)
+    mismatch (tok, t, d);
 }
 
 /* vim: set sw=2 ts=8 cino=>4,n-2,{2,^-2,t0,(0,u0,w1,M1 : */

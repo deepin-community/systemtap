@@ -103,11 +103,7 @@ __stp_tf_vma_new_entry(void)
 	// callback freeing the entries will not depend on using a function
 	// within this module to free the allocated memory (_stp_kfree), which
 	// lets us omit a costly rcu_barrier operation upon module unload.
-#ifdef CONFIG_UTRACE
-	entry = kmalloc(sizeof(*entry), STP_ALLOC_SLEEP_FLAGS);
-#else
 	entry = kmalloc(sizeof(*entry), STP_ALLOC_FLAGS);
-#endif
 	return entry;
 }
 
@@ -435,7 +431,7 @@ stap_find_exe_file(struct mm_struct* mm)
         if (kallsyms_get_mm_exe_file == NULL)
           return NULL; /* can't happen; _stp_handle_start would abort before this point */
         else
-          return (* (get_mm_exe_file_fn) kallsyms_get_mm_exe_file)(mm);
+          return ibt_wrapper(struct file *, (* (get_mm_exe_file_fn) kallsyms_get_mm_exe_file)(mm));
 #endif
 #else
 	struct file *exe_file = NULL;

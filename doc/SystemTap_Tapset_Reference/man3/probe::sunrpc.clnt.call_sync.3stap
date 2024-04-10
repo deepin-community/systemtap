@@ -2,12 +2,12 @@
 .\"     Title: probe::sunrpc.clnt.call_sync
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: November 2022
+.\"      Date: November 2023
 .\"    Manual: Networking Tapset
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::SUNRPC\&.CLNT" "3stap" "November 2022" "SystemTap Tapset Reference" "Networking Tapset"
+.TH "PROBE::SUNRPC\&.CLNT" "3stap" "November 2023" "SystemTap Tapset Reference" "Networking Tapset"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -36,11 +36,6 @@ sunrpc\&.clnt\&.call_sync
 .fi
 .SH "VALUES"
 .PP
-\fIprogname\fR
-.RS 4
-the RPC program name
-.RE
-.PP
 \fIservername\fR
 .RS 4
 the server machine name
@@ -49,16 +44,6 @@ the server machine name
 \fIxid\fR
 .RS 4
 current transmission id
-.RE
-.PP
-\fIproc\fR
-.RS 4
-the procedure number in this RPC call
-.RE
-.PP
-\fIprocname\fR
-.RS 4
-the procedure name in this RPC call
 .RE
 .PP
 \fIdead\fR
@@ -71,14 +56,19 @@ whether this client is abandoned
 the port number
 .RE
 .PP
+\fIprog\fR
+.RS 4
+the RPC program number
+.RE
+.PP
+\fIprogname\fR
+.RS 4
+the RPC program name
+.RE
+.PP
 \fIvers\fR
 .RS 4
 the RPC program version number
-.RE
-.PP
-\fIflags\fR
-.RS 4
-flags
 .RE
 .PP
 \fIprot\fR
@@ -86,9 +76,19 @@ flags
 the IP protocol number
 .RE
 .PP
-\fIprog\fR
+\fIprocname\fR
 .RS 4
-the RPC program number
+the procedure name in this RPC call
+.RE
+.PP
+\fIproc\fR
+.RS 4
+the procedure number in this RPC call
+.RE
+.PP
+\fIflags\fR
+.RS 4
+flags
 .RE
 .SH SEE ALSO\n 
 .IR tapset::rpc (3stap)
