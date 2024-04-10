@@ -2,12 +2,12 @@
 .\"     Title: probe::scsi.iocompleted
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: November 2022
+.\"      Date: November 2023
 .\"    Manual: SCSI Tapset
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::SCSI\&.IOCOMP" "3stap" "November 2022" "SystemTap Tapset Reference" "SCSI Tapset"
+.TH "PROBE::SCSI\&.IOCOMP" "3stap" "November 2023" "SystemTap Tapset Reference" "SCSI Tapset"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -36,21 +36,6 @@ scsi\&.iocompleted
 .fi
 .SH "VALUES"
 .PP
-\fIdata_direction\fR
-.RS 4
-The data_direction specifies whether this command is from/to the device
-.RE
-.PP
-\fIgoodbytes\fR
-.RS 4
-The bytes completed
-.RE
-.PP
-\fIdevice_state_str\fR
-.RS 4
-The current state of the device, as a string
-.RE
-.PP
 \fIdata_direction_str\fR
 .RS 4
 Data direction, as a string
@@ -61,9 +46,24 @@ Data direction, as a string
 The host number
 .RE
 .PP
-\fIdev_id\fR
+\fIreq_addr\fR
 .RS 4
-The scsi device id
+The current struct request pointer, as a number
+.RE
+.PP
+\fIdevice_state_str\fR
+.RS 4
+The current state of the device, as a string
+.RE
+.PP
+\fIgoodbytes\fR
+.RS 4
+The bytes completed
+.RE
+.PP
+\fIdata_direction\fR
+.RS 4
+The data_direction specifies whether this command is from/to the device
 .RE
 .PP
 \fIchannel\fR
@@ -71,19 +71,19 @@ The scsi device id
 The channel number
 .RE
 .PP
-\fIreq_addr\fR
+\fIdevice_state\fR
 .RS 4
-The current struct request pointer, as a number
+The current state of the device
+.RE
+.PP
+\fIdev_id\fR
+.RS 4
+The scsi device id
 .RE
 .PP
 \fIlun\fR
 .RS 4
 The lun number
-.RE
-.PP
-\fIdevice_state\fR
-.RS 4
-The current state of the device
 .RE
 .SH SEE ALSO\n 
 .IR tapset::scsi (3stap)

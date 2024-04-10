@@ -119,6 +119,10 @@ static void _stp_do_relocation(const char __user *buf, size_t count)
           _stp_kallsyms_on_each_symbol = (void *) msg.address;
   }
 #endif
+  if (!strcmp ("kernel", msg.module)
+      && !strcmp ("module_kallsyms_on_each_symbol", msg.reloc)) {
+          _stp_module_kallsyms_on_each_symbol = (void *) msg.address;
+  }
 
   _stp_kmodule_update_address(msg.module, msg.reloc, msg.address);
 }
@@ -320,9 +324,7 @@ static int _stp_module_notifier (struct notifier_block * nb,
         /* Give the probes a chance to update themselves. */
         /* Proper kprobes support for this appears to be relatively
            recent.  Example prerequisite commits: 0deddf436a f24659d9 */
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,29)
-        systemtap_module_refresh(mod->name);
-#endif
+systemtap_module_refresh(mod->name);
 
 #endif /* skipped for ancient or kallsyms-free kernels */
 
@@ -335,7 +337,7 @@ static int _stp_module_update_self (void)
   /* Or if we need to figure out the addr->file:line mapping */
 #if (defined(STP_USE_DWARF_UNWINDER) && defined(STP_NEED_UNWIND_DATA)) \
     || defined(STP_NEED_LINE_DATA)
-#if defined(CONFIG_KALLSYMS)  && LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,11)
+#if defined(CONFIG_KALLSYMS)
 
 	bool found_eh_frame = false;
 	struct module *mod = THIS_MODULE;
@@ -386,6 +388,8 @@ static int _stp_module_update_self (void)
 			_stp_module_self.sections[1].static_addr = address;
 #ifdef STAPCONF_MODULE_LAYOUT
 			_stp_module_self.sections[1].size = mod->core_layout.text_size;
+#elif defined(STAPCONF_MODULE_MEMORY)
+			_stp_module_self.sections[1].size = mod->mem[MOD_TEXT].size;
 #elif defined(STAPCONF_GRSECURITY)
                         _stp_module_self.sections[1].size = mod->core_size_rx;
 #else
@@ -421,7 +425,7 @@ static int _stp_module_update_self (void)
 
         put_module_sect_attrs (&attrs);
         
-#endif /* defined(CONFIG_KALLSYMS) && LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,11) */
+#endif /* defined(CONFIG_KALLSYMS) */
 #endif /* (defined(STP_USE_DWARF_UNWINDER) && defined(STP_NEED_UNWIND_DATA))
           || defined(STP_NEED_LINE_DATA) */
 

@@ -73,6 +73,12 @@
    PKGLIBDIR) */
 #undef HAVE_JAVA
 
+/* Define to 1 if the json-c library is installed */
+#undef HAVE_JSON_C
+
+/* Define to 1 if the language server is supported */
+#undef HAVE_LANGUAGE_SERVER_SUPPORT
+
 /* Define to 1 if debuginfod is enabled. */
 #undef HAVE_LIBDEBUGINFOD
 
@@ -136,6 +142,9 @@
 /* Define to 1 if you have the SELinux libraries. */
 #undef HAVE_SELINUX
 
+/* Define to 1 if you have the <stdatomic.h> header file. */
+#undef HAVE_STDATOMIC_H
+
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
@@ -162,6 +171,10 @@
 
 /* Define to 1 if you have the <wchar.h> header file. */
 #undef HAVE_WCHAR_H
+
+/* Define if a new enough version of elfutils exists to support metadata
+   querying */
+#undef METADATA_QUERY_ENABLED
 
 /* Define to 1 if the base client code is needed. */
 #undef NEED_BASE_CLIENT_CODE

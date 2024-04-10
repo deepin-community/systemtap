@@ -2,12 +2,12 @@
 .\"     Title: probe::nfsd.read
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: November 2022
+.\"      Date: November 2023
 .\"    Manual: Network File Storage Tapsets
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::NFSD\&.READ" "3stap" "November 2022" "SystemTap Tapset Reference" "Network File Storage Tapsets"
+.TH "PROBE::NFSD\&.READ" "3stap" "November 2023" "SystemTap Tapset Reference" "Network File Storage Tapsets"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -36,12 +36,12 @@ nfsd\&.read
 .fi
 .SH "VALUES"
 .PP
-\fIfile\fR
+\fIvlen\fR
 .RS 4
-argument file, indicates if the file has been opened\&.
+read blocks
 .RE
 .PP
-\fIsize\fR
+\fIcount\fR
 .RS 4
 read bytes
 .RE
@@ -51,9 +51,14 @@ read bytes
 the ip address of client
 .RE
 .PP
-\fIcount\fR
+\fIsize\fR
 .RS 4
 read bytes
+.RE
+.PP
+\fIfile\fR
+.RS 4
+argument file, indicates if the file has been opened\&.
 .RE
 .PP
 \fIfh\fR
@@ -64,11 +69,6 @@ file handle (the first part is the length of the file handle)
 \fIoffset\fR
 .RS 4
 the offset of file
-.RE
-.PP
-\fIvlen\fR
-.RS 4
-read blocks
 .RE
 .PP
 \fIvec\fR

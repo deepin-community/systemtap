@@ -16,6 +16,10 @@
 #include "util.h"
 #include "stringtable.h"
 
+#if HAVE_LANGUAGE_SERVER_SUPPORT
+#include "language-server/stap-language-server.h"
+#endif
+
 #include <iostream>
 
 #include <fstream>
@@ -168,6 +172,10 @@ private:
   void print_error (const parse_error& pe, bool errs_as_warnings = false);
   unsigned num_errors;
 
+  // Tracks some data which will survive past the parser's lifetime.
+  // This is currently used to pass on some completion data
+  shared_ptr<parser_completion_state> c_state;
+
 private: // nonterminals
   void parse_probe (vector<probe*>&, vector<probe_alias*>&);
   void parse_private (vector<vardecl*>&, vector<probe*>&,
@@ -294,6 +302,7 @@ parser::parser (systemtap_session& s, const string &n, istream& i, unsigned flag
   user_file (flags & pf_user_file), auto_path (flags & pf_auto_path),
   context(con_unknown), systemtap_v_seen(0), last_t (0), next_t (0), num_errors (0)
 {
+  c_state = make_shared<parser_completion_state>(new parser_completion_state);
 }
 
 parser::~parser()
@@ -1207,6 +1216,8 @@ parser::next ()
     throw PARSE_ERROR (_("unexpected end-of-file"));
 
   last_t = next_t;
+  // Save the last (not-null token)
+  if(last_t) c_state->tok = last_t;
   // advance by zeroing next_t
   next_t = 0;
   return last_t;
@@ -1221,6 +1232,8 @@ parser::peek ()
 
   // don't advance by zeroing next_t
   last_t = next_t;
+  // Save the last (not-null token)
+  if(last_t) c_state->tok = last_t;
   return next_t;
 }
 
@@ -1710,6 +1723,8 @@ skip:
 
 	  if (c < 0 || c == '\n')
 	    {
+              // Don't lose the unclosed string
+              n->content = string("\"") + token_str;
               n->make_junk(tok_junk_unclosed_quote);
               return n;
 	    }
@@ -1815,6 +1830,8 @@ skip:
               c2 = input_get();
             }
 
+            // Don't lose the unclosed embedded
+            n->content = string("%{") + token_str;
             n->make_junk(tok_junk_unclosed_embedded);
             return n;
         }
@@ -1973,6 +1990,16 @@ parser::parse ()
 	{
 	  print_error (pe, errs_as_warnings);
 
+    c_state->context = context;
+    // If there is a parse error token it'll take precedence over the current c_state token (which is last_t)
+    if(pe.tok) c_state->tok = pe.tok;
+    // This is the root where the parsing failed i.e the place to complete, so send the error up
+    #if HAVE_LANGUAGE_SERVER_SUPPORT
+    if(session.language_server_mode){
+      session.lang_server->c_state = c_state;
+      throw pe;
+    }
+    #endif
           // XXX: do we want tok_junk to be able to force skip_some behaviour?
           if (pe.skip_some) // for recovery
             // Quietly swallow all tokens until the next keyword we can start parsing from.
@@ -2049,7 +2076,7 @@ parser::parse_synthetic_probe (const token* chain)
 
   input.set_current_file(0);
   input.set_current_token_chain(0);
-  p->synthetic = true;
+  if(p) p->synthetic = true;
   return p;
 }
 
@@ -2160,6 +2187,7 @@ parser::parse_embeddedcode ()
 block*
 parser::parse_stmt_block ()
 {
+  c_state->in_body = true; // Save that we've entered a probe/function's body
   block* pb = new block;
 
   const token* t = next ();
@@ -2179,6 +2207,7 @@ parser::parse_stmt_block ()
       pb->statements.push_back (parse_statement ());
     }
 
+  c_state->in_body = false;
   return pb;
 }
 
@@ -2497,6 +2526,8 @@ parser::do_parse_functiondecl (vector<functiondecl*>& functions, const token* t,
     }
 
   t = peek();
+  if(!t)
+    throw PARSE_ERROR (_("expected '{'"));
   if (t->type == tok_operator && t->content == ":")
     {
       swallow();
@@ -2559,8 +2590,15 @@ parser::parse_components()
   vector<probe_point*> pps;
   while (1)
     {
-      vector<probe_point*> suffix = parse_component();
-
+      vector<probe_point*> suffix;
+      try
+      { suffix = parse_component(); }
+      catch(const parse_error& pe){
+        // Keep the LHS of the probe point in the state, even if the last component was faulty
+        // and wasn't added (It'll be stored seperately as c_state->comp)
+        this->c_state->pp = !pps.empty() ? pps.back() : NULL;
+        throw pe;
+      }
       // Cartesian product of components
       if (pps.empty())
         pps = suffix;
@@ -2594,6 +2632,7 @@ parser::parse_components()
           for (unsigned i = 0; i < suffix.size(); i++) delete suffix[i];
           pps = product;
         }
+      this->c_state->pp = !pps.empty() ? pps.back() : NULL;
 
       const token* t = peek();
       if (t && t->type == tok_operator && t->content == ".")
@@ -2651,6 +2690,8 @@ parser::parse_components()
 vector<probe_point*>
 parser::parse_component()
 {
+  // Parsing a new component, so clear the current pointer
+  c_state->comp = NULL;
   const token* t = next ();
   if (! (t->type == tok_identifier
          // we must allow ".return" and ".function", which are keywords
@@ -2707,6 +2748,7 @@ parser::parse_component()
         }
 
       probe_point::component* c = new probe_point::component;
+      c_state->comp = c;
       c->functor = t->content;
       c->tok = t;
       vector<probe_point*> pps;
@@ -2723,6 +2765,7 @@ parser::parse_component()
       if (t && t->type == tok_operator && t->content == "(")
         {
           swallow (); // consume "("
+          c->arg = NULL; // We zero it in case the arg parse fails
           c->arg = parse_literal ();
 
           t = next ();
@@ -2895,6 +2938,8 @@ parser::parse_return_statement ()
   s->tok = t;
 
   t = peek ();
+  if(!t)
+    throw PARSE_ERROR (_("expected ';', '}' or an expression statement"));
   if (t->type == tok_operator && (t->content == ";" || t->content == "}"))
     s->value = NULL;  // no return value
   else

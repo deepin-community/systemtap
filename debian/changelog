@@ -1,8 +1,28 @@
-systemtap (4.8-2deepin1) unstable; urgency=medium
+systemtap (5.0-2) unstable; urgency=medium
 
-  * Add sunway support. (rebased)
+  * Build with g++-12 to workaround FTBFS with g++-13 on i386, ppc64el,
+    riscv64 (see #1057205).
 
- -- Miao Changwei <miaochangwei@uniontech.com>  Wed, 30 Aug 2023 16:22:40 +0800
+ -- Emanuele Rocca <ema@debian.org>  Sun, 03 Dec 2023 20:14:50 +0100
+
+systemtap (5.0-1) unstable; urgency=medium
+
+  * New upstream release. (Closes: #1055418)
+  * Drop d/patches/include-cstdint.diff, applied upstream.
+  * Add build-dependency on libdebuginfod-dev.
+
+ -- Emanuele Rocca <ema@debian.org>  Fri, 01 Dec 2023 11:50:12 +0100
+
+systemtap (4.9-1) unstable; urgency=medium
+
+  * New upstream release.
+  * stap-prep: fix kernel version number parsing. (Closes: #1040480)
+  * Drop d/patches/dtrace-deterministic-tmpfile.diff, applied upstream.
+  * Add d/patches/include-cstdint.diff.
+  * Do not ship jupyter files.
+  * Refresh d/patches.
+
+ -- Emanuele Rocca <ema@debian.org>  Fri, 14 Jul 2023 19:49:33 +0200
 
 systemtap (4.8-2) unstable; urgency=medium
 

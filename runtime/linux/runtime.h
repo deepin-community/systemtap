@@ -59,12 +59,17 @@
 #define stp_mm_segment_t unsigned long
 #define STP_KERNEL_DS 0
 #define STP_USER_DS 1
+#define STP_NUMERICAL_DS 1
 #define MM_SEG_IS_KERNEL(seg) ((seg)==STP_KERNEL_DS)
 
 // Required for kernel write operations:
 static void *kallsyms_copy_to_kernel_nofault;
 #endif
 
+#ifndef STAPCONF_NMI_UACCESS_OKAY
+/* alas. nmi_access_okay() is not exported by modern kernels */
+static void *kallsyms_nmi_uaccess_okay = NULL;
+#endif
 
 /* A fallthrough; macro to let the runtime survive -Wimplicit-fallthrough=5 */
 /* from <linux/compiler_attribute.h> */
@@ -80,10 +85,7 @@ static void *kallsyms_copy_to_kernel_nofault;
 #endif
 #endif
 
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,23)
 #include <linux/user_namespace.h>
-#endif
 
 #if !defined (CONFIG_DEBUG_FS)  && !defined (CONFIG_DEBUG_FS_MODULE)
 #error "DebugFS is required and was not found in the kernel."
@@ -96,7 +98,7 @@ static void *kallsyms_copy_to_kernel_nofault;
 #undef udelay
 static void *kallsyms_udelay_simple;
 typedef typeof(&udelay_simple) udelay_simple_fn;
-#define udelay(x) ((* (udelay_simple_fn)(kallsyms_udelay_simple))((x)))
+#define udelay(x) void_ibt_wrapper((* (udelay_simple_fn)(kallsyms_udelay_simple))((x)))
 #endif
 
 #ifndef clamp
@@ -216,10 +218,14 @@ static void *_stp_kallsyms_lookup_name;
 #ifndef CONFIG_PPC64
 #define STAPCONF_KALLSYMS_ON_EACH_SYMBOL
 #if !defined(STAPCONF_KALLSYMS_ON_EACH_SYMBOL_EXPORTED)
-// XXX Should not be static, since it is linked into kprobes.c.
-static void *_stp_kallsyms_on_each_symbol;
+// Not static, since it is linked into kprobes.c:
+void *_stp_kallsyms_on_each_symbol;
 #endif
 #endif
+
+// No export check and gates.  This one seems simply like a non-export.
+// Not static, since it is linked into kprobes.c:
+void *_stp_module_kallsyms_on_each_symbol;
 
 // PR13489, inode-uprobes sometimes lacks the necessary SYMBOL_EXPORT's.
 #if !defined(STAPCONF_TASK_USER_REGSET_VIEW_EXPORTED)
@@ -259,6 +265,53 @@ static void *kallsyms___lock_task_sighand;
 static void *kallsyms_get_mm_exe_file;
 #endif
 
+/* PR30777: Need a mechanism to temporarily turn off Intel IBT */
+#ifdef CONFIG_X86_KERNEL_IBT
+
+__noendbr u64 ibt_save(bool disable)
+{
+	u64 msr = 0;
+
+	if (cpu_feature_enabled(X86_FEATURE_IBT)) {
+		rdmsrl(MSR_IA32_S_CET, msr);
+		if (disable)
+			wrmsrl(MSR_IA32_S_CET, msr & ~CET_ENDBR_EN);
+	}
+
+	return msr;
+}
+
+__noendbr void ibt_restore(u64 save)
+{
+	u64 msr;
+
+	if (cpu_feature_enabled(X86_FEATURE_IBT)) {
+		rdmsrl(MSR_IA32_S_CET, msr);
+		msr &= ~CET_ENDBR_EN;
+		msr |= (save & CET_ENDBR_EN);
+		wrmsrl(MSR_IA32_S_CET, msr);
+	}
+}
+
+#define ibt_wrapper(rettype, function)  ({	\
+  u64 ibt_value = ibt_save(true);		\
+  rettype retval = (function);			\
+  ibt_restore(ibt_value);			\
+  retval;					\
+})
+
+#define void_ibt_wrapper(function)  ({		\
+  u64 ibt_value = ibt_save(true);		\
+  (function);					\
+  ibt_restore(ibt_value);			\
+  0;						\
+})
+
+#else
+#define ibt_wrapper(rettype, function)  ({ (function); })
+#define void_ibt_wrapper(function)  ({ (function); })
+#endif
+
 #include "access_process_vm.h"
 #include "loc2c-runtime.h"
 
@@ -270,7 +323,7 @@ static void *kallsyms_get_mm_exe_file;
 #include "../regs.c"
 #include "regs-ia64.c"
 
-#if (defined(CONFIG_UTRACE) || defined(STAPCONF_UTRACE_VIA_TRACEPOINTS))
+#if (defined(STAPCONF_UTRACE_VIA_TRACEPOINTS))
 #define HAVE_TASK_FINDER
 #include "task_finder.c"
 #else
@@ -348,10 +401,12 @@ static struct kernel_param_ops param_ops_int64_t = {
 #endif
 #undef _STP_KERNEL_PARAM_ARG
 
+#include <linux/workqueue.h>
+struct workqueue_struct *systemtap_wq;
 
 static inline void stp_synchronize_sched(void)
 {
-  flush_scheduled_work();
+  flush_workqueue(systemtap_wq);
 #if defined(STAPCONF_SYNCHRONIZE_SCHED)
   synchronize_sched();
 #elif defined(STAPCONF_SYNCHRONIZE_RCU)
@@ -370,13 +425,18 @@ static int systemtap_kernel_module_init (void);
 static void systemtap_kernel_module_exit (void);
 
 static unsigned long stap_hash_seed; /* Init during module startup */
-int init_module (void)
+
+static int stap_init_module (void)
 {
   int rc;
   /* With deliberate hash-collision-inducing data conceivably fed to
      stap, it is beneficial to add some runtime-random value to the
      map hash. */
   get_random_bytes(&stap_hash_seed, sizeof (stap_hash_seed));
+  systemtap_wq = alloc_workqueue("systemtap-wq",
+		WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
+  if (!systemtap_wq)
+    return !systemtap_wq;
   rc = systemtap_kernel_module_init();
   if (rc)
     return rc;
@@ -386,14 +446,20 @@ int init_module (void)
   return rc;
 }
 
-void cleanup_module(void)
+module_init(stap_init_module);
+
+void stap_cleanup_module(void)
 {
   _stp_transport_close();
   /* PR19833.  /proc/systemtap/$MODULENAME may be disposed-of here,
      due to tapset-procfs.cxx cleaning up after procfs probes (such
      as in --monitor mode).  */
   systemtap_kernel_module_exit();
+  if (systemtap_wq)
+    destroy_workqueue(systemtap_wq);
 }
+
+module_exit(stap_cleanup_module);
 
 #define pseudo_atomic_cmpxchg(v, old, new) ({\
 	int ret;\

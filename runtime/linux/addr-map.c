@@ -25,6 +25,7 @@
 // See <https://sourceware.org/bugzilla/show_bug.cgi?id=12970> for
 // more details.
 
+#include <linux/runtime.h>
 #include <linux/uaccess.h>
 
 #ifndef PR12970
@@ -35,25 +36,62 @@
 #endif
 
 
-#ifdef STAPCONF_ACCESS_OK_2ARGS
+#ifdef STAPCONF_ASM_ACCESS_OK
+/* access_ok() is designed for user context only and calling it from
+ * perf event etc probe contexts would result in kernel warnings
+ * on debug kernels. see upstream kernel commit d319f34456 for more details.
+ */
+#define stp_access_ok(x,y,z) __access_ok(y,z)
+#elif defined(STAPCONF_ACCESS_OK_2ARGS)
 #define stp_access_ok(x,y,z) access_ok(y,z)
 #else
 #define stp_access_ok(x,y,z) access_ok(x,y,z)
 #endif
 
-static int
+#ifdef STAPCONF_NMI_UACCESS_OKAY
+#include <linux/mm.h>
+#include <asm/tlbflush.h>
+#endif
+
+static inline bool
+stp_nmi_uaccess_okay(void)
+{
+#ifdef STAPCONF_NMI_UACCESS_OKAY
+    /* older kernels (like 5.0) still have this as an inline function in
+     * their arch-specific headers */
+    return nmi_uaccess_okay();
+#else
+    /* newer kernels (since 5.18) no longer export nmi_uaccess_okay()
+     * but we can still get it from the kernel symbol tables. */
+    if (kallsyms_nmi_uaccess_okay != NULL)
+      return ibt_wrapper(bool, ((bool (*)(void)) kallsyms_nmi_uaccess_okay)());
+
+    return true;  /* don't bother */
+#endif
+}
+
+static __always_inline int
 lookup_bad_addr_user(const int type, const unsigned long addr, const size_t size)
 {
-  /* Is this a valid memory access?
-   * 
-   * Note we're using stp_access_ok() here. This is only supposed to be
+  /* Is this a valid memory access? */
+
+  /* We must call stp_nmi_uaccess_okay() to protect races against CR3
+   * context switching on X86. See upstream kernel commits 4012e77a90
+   * and d319f344561de for more details.
+   */
+  if (!stp_nmi_uaccess_okay())
+      return 1;
+
+  /* Note we're using stp_access_ok() here. This is only supposed to be
    * called when we're in task context. Occasionally lookup_bad_addr()
    * gets called when not in task context. If in_task() exists, only
    * call stp_access_ok() when we're in task context (otherwise we'll get
    * a kernel warning). If we aren't in task context, we'll just do a
    * range check.
    */
-#if !defined(in_task)
+#if !defined(in_task) || LINUX_VERSION_CODE >= KERNEL_VERSION(5,18,0)
+  /* NB access_ok() checks TASK_SIZE_MAX (used to be user_addr_max()) on
+   * all architectures since kernel 5.18 */
   if (size == 0 || ULONG_MAX - addr < size - 1
       || !stp_access_ok(type, (void *)addr, size))
     return 1;
@@ -63,6 +101,8 @@ lookup_bad_addr_user(const int type, const unsigned long addr, const size_t size
       || (!in_task()
 #if defined(user_addr_max)
 	  && ((user_addr_max() - size) < addr)
+#elif defined(TASK_SIZE_MAX)
+	  && ((TASK_SIZE_MAX - size) < addr)
 #endif
 	      ))
     return 1;
@@ -82,18 +122,17 @@ lookup_bad_addr_user(const int type, const unsigned long addr, const size_t size
   return 0;
 }
 
-static int
+static __always_inline int
 lookup_bad_addr(const int type, const unsigned long addr, const size_t size,
                 const stp_mm_segment_t seg)
 {
-#ifndef STAPCONF_SET_FS
   /* Is this a valid memory access?
    *
    * PR26811: Since kernel 5.10 due to set_fs() removal we need to
    * distinguish kernel- and user-space addresses when asking this
    * question.
    */
-  if (!MM_SEG_IS_KERNEL(seg))
+  if (stp_is_user_ds(seg))
     return lookup_bad_addr_user(type, addr, size);
 
   /* For kernel addr, skip the in_task() portion of the address checks: */
@@ -117,10 +156,6 @@ lookup_bad_addr(const int type, const unsigned long addr, const size_t size,
 #endif
 
   return 0;
-#else
-  /* XXX: On earlier kernels the same logic works for kernel-space: */
-  return lookup_bad_addr_user(type, addr, size);
-#endif
 }
 
 #else /* PR12970 */

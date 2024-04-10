@@ -1,0 +1,6 @@
+set test "environment_sanity_test"
+
+environment_sanity_test
+# a failure causes a NOTREACHED early dejagnu exit
+
+pass $test

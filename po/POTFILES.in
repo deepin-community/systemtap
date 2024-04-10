@@ -70,6 +70,7 @@ stapregex-tree.cxx
 stapregex-tree.h
 staprun/common.c
 staprun/ctl.c
+staprun/gheap.h
 staprun/mainloop.c
 staprun/modverify.c
 staprun/modverify.h
@@ -85,16 +86,15 @@ staprun/start_cmd.c
 staprun/strfloctime.c
 stap-serverd.cxx
 stap-sign-module.cxx
-stapsslerr.h
 staptree.cxx
 staptree.h
 stapvirt.c
 stringtable.cxx
 stringtable.h
 tapset-been.cxx
+tapset-debuginfod.cxx
 tapset-dynprobe.cxx
 tapset-dynprobe.h
-tapset-itrace.cxx
 tapset-mark.cxx
 tapset-method.cxx
 tapset-netfilter.cxx

@@ -1,7 +1,7 @@
 dnl configure.ac --- autoconf input file for systemtap
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT([systemtap],[4.8],[systemtap@sourceware.org],[systemtap])
+AC_INIT([systemtap],[5.0],[systemtap@sourceware.org],[systemtap])
 dnl                  ^^^ see also NEWS, systemtap.spec, testsuite/configure.ac
 dnl                      doc/SystemTap_Beginners_Guide/en-US/Book_Info.xml
 
@@ -15,6 +15,7 @@ AM_MAINTAINER_MODE
 
 m4_ifdef([AM_SILENT_RULES],[AM_SILENT_RULES([yes])])
 
+PKG_PROG_PKG_CONFIG
 AC_USE_SYSTEM_EXTENSIONS
 AC_PROG_MKDIR_P
 AC_SUBST(MKDIR_P)
@@ -201,23 +202,43 @@ AC_SUBST(PIECFLAGS)
 AC_SUBST(PIECXXFLAGS)
 
 dnl Handle optional debuginfod support. If not specified by the user,
-dnl use it if present.
+dnl use it if present.  If given --with-debuginfod=/PATH, interpret /PATH as a prefix
+dnl of an elfutils install tree.
 AC_ARG_WITH([debuginfod],
   AS_HELP_STRING([--with-debuginfod],[Enable debuginfo lookups with debuginfod (auto/yes/no)]),
                  [], [with_debuginfod=auto])
 AC_MSG_CHECKING([whether to use debuginfod])
-AC_MSG_RESULT([$with_debuginfod])
-if test "x$with_debuginfod" != xno; then
+if expr "$with_debuginfod" : "/.*" >/dev/null; then
+dnl take the user at his or her word
+  debuginfod_LDFLAGS=-L$with_debuginfod/lib
+  debuginfod_LIBS=-ldebuginfod
+  debuginfod_CFLAGS=-I$with_debuginfod/include
+  have_debuginfod=1
+  AC_DEFINE([HAVE_LIBDEBUGINFOD], [1], [Define to 1 if debuginfod is enabled.])
+  AC_MSG_RESULT([yes])
+elif test "x$with_debuginfod" != xno; then
+dnl check in the system pkgconfig
   PKG_CHECK_MODULES([debuginfod], [libdebuginfod >= 0.179],
-    [AC_DEFINE([HAVE_LIBDEBUGINFOD], [1], [Define to 1 if debuginfod is enabled.])],
+    [have_debuginfod=1],
     [if test "x$with_debuginfod" = xyes; then
        AC_MSG_ERROR(["--with-debuginfod was given, but libdebuginfod is missing or unusable."])
-     else
-       AC_MSG_WARN([libdebuginfod is missing or unusable; some features may be unavailable.])
      fi])
+  AC_DEFINE([HAVE_LIBDEBUGINFOD], [1], [Define to 1 if debuginfod is enabled.])
+  AC_MSG_RESULT([yes])  
 else
-  AC_MSG_WARN([debuginfod support disabled; some features may be unavailable.])
+  AC_MSG_RESULT([no])
 fi
+
+ac_save_CFLAGS="$CFLAGS"
+ac_save_LDFLAGS="$LDFLAGS"
+CFLAGS="$CFLAGS $debuginfod_CFLAGS"
+LDFLAGS="$LDFLAGS $debuginfod_LDFLAGS"
+AC_CHECK_LIB(debuginfod, debuginfod_find_metadata, [
+  AC_DEFINE([METADATA_QUERY_ENABLED], [1], [Define if a new enough version of elfutils exists to support metadata querying])
+])
+CFLAGS="$ac_save_CFLAGS"
+LDFLAGS="$ac_save_LDFLAGS"
+AC_SUBST(debuginfod_LDFLAGS)
 
 dnl Handle optional sqlite support.  If enabled/disabled by the user,
 dnl do the right thing.  If not specified by the user, use it if
@@ -489,6 +510,8 @@ if test "$with_rpm" != "no"; then
      AC_MSG_WARN([cannot find librpmio])
   fi
 fi
+
+AC_CHECK_HEADERS([stdatomic.h])
 
 dnl Look for rpmcrypto.h
 AC_CHECK_HEADERS([rpm/rpmcrypto.h], [
@@ -785,16 +808,36 @@ dnl We want either (or both) python probe support.
 AM_CONDITIONAL([HAVE_PYTHON_PROBES],
   [test "x$have_python2_support" = "xyes" -o "x$have_python3_support" = "xyes"])
 
+PKG_CHECK_MODULES([jsonc], [json-c >= 0.13], [have_jsonc=yes], [have_jsonc=no])
+PKG_CHECK_MODULES([ncurses], [ncurses], [have_ncurses=yes], [have_ncurses=no])
+
 AC_ARG_ENABLE([monitor], AS_HELP_STRING([--disable-monitor],[Disable monitor]))
 if test "$enable_monitor" != "no"; then
 dnl Check for presence of json-c and ncurses for use in monitor mode
-PKG_CHECK_MODULES([jsonc], [json-c >= 0.11], [have_jsonc=yes], [have_jsonc=no])
-PKG_CHECK_MODULES([ncurses], [ncurses], [have_ncurses=yes], [have_ncurses=no])
 if test "${have_jsonc}" = "yes" -a "${have_ncurses}" = yes; then
   AC_DEFINE([HAVE_MONITOR_LIBS],[1],[Define to 1 if json-c and ncurses libraries are installed])
 fi
 fi
 AM_CONDITIONAL([HAVE_MONITOR_LIBS], [test "${have_jsonc}" = "yes" -a "${have_ncurses}" = "yes" -a "$enable_monitor" != "no"])
+if test "${have_jsonc}" = "yes"; then
+  AC_DEFINE([HAVE_JSON_C],[1],[Define to 1 if the json-c library is installed])
+fi
+AM_CONDITIONAL([HAVE_JSON_C], [test "${have_jsonc}" = "yes"])
+
+# We require gcc >=8 since we use some more modern language features such as lambda-capture [this] and
+# initializer list constructors in class template argument deduction
+AC_MSG_CHECKING([to see if the language server is supported])
+if { echo '#if __GNUC__ >= 8 '
+     echo ' yes '
+     echo '#endif'; } | ${CC} -E - | grep yes > /dev/null; then
+  have_language_server_support=yes
+  AC_MSG_RESULT([yes])
+  AC_DEFINE([HAVE_LANGUAGE_SERVER_SUPPORT], [1],
+    [Define to 1 if the language server is supported])
+else
+  AC_MSG_RESULT([no])
+fi
+AM_CONDITIONAL([HAVE_LANGUAGE_SERVER_SUPPORT], [test "x$have_language_server_support" = "xyes"])
 
 AC_CACHE_CHECK([for assembler .section "?" flags support], stap_cv_sectionq, [
 old_CFLAGS="$CFLAGS"
@@ -980,6 +1023,9 @@ AC_CONFIG_FILES(java/Makefile)
 AC_CONFIG_FILES([java/stapbm], [chmod +x java/stapbm])
 AC_CONFIG_FILES(java/org/systemtap/byteman/helper/HelperSDT.java)
 AC_CONFIG_FILES(python/Makefile)
+AC_CONFIG_FILES(interactive-notebook/Makefile)
+AC_CONFIG_FILES([interactive-notebook/stap-jupyter-container], [chmod +x interactive-notebook/stap-jupyter-container])
+AC_CONFIG_FILES([interactive-notebook/stap-jupyter-install], [chmod +x interactive-notebook/stap-jupyter-install])
 AC_CONFIG_FILES(staprun/Makefile)
 AC_CONFIG_FILES(stapbpf/Makefile)
 AC_CONFIG_FILES([httpd/Makefile httpd/docker/Makefile])

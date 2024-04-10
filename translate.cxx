@@ -40,6 +40,7 @@ extern "C" {
 #include <ftw.h>
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
+#include <unistd.h>
 }
 
 // Max unwind table size (debug or eh) per module. Somewhat arbitrary
@@ -1197,13 +1198,8 @@ c_unparser::emit_common_header ()
 
       // We will use a workqueue to schedule module_refresh work when we need
       // to enable/disable probes.
-      o->newline( 0)  << "#include <linux/workqueue.h>";
       o->newline( 0)  << "static struct work_struct module_refresher_work;";
-      o->newline( 0)  << "#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)";
-      o->newline( 0)  << "static void module_refresher(void *data) {";
-      o->newline( 0)  << "#else";
       o->newline( 0)  << "static void module_refresher(struct work_struct *work) {";
-      o->newline( 0)  << "#endif";
       o->newline( 1)  <<    "systemtap_module_refresh(NULL);";
       o->newline(-1)  << "}";
 
@@ -1219,7 +1215,7 @@ c_unparser::emit_common_header ()
       o->newline(+1)  <<   "if (atomic_cmpxchg(&need_module_refresh, 1, 0) == 1)";
       // NB: one might like to invoke systemtap_module_refresh(NULL) directly from
       // here ... however hrtimers are called from an unsleepable context, so no can do.
-      o->newline(+1)  <<     "schedule_work(&module_refresher_work);";
+      o->newline(+1)  <<     "queue_work(systemtap_wq, &module_refresher_work);";
       o->newline(-1)  <<   "hrtimer_set_expires(timer,";
       o->newline( 0)  <<   "  ktime_add(hrtimer_get_expires(timer),";
       o->newline( 0)  <<   "            ktime_set(0, STP_ON_THE_FLY_INTERVAL))); ";
@@ -2049,11 +2045,7 @@ c_unparser::emit_module_init ()
   if (!session->runtime_usermode_p())
     {
       // Initialize workqueue needed for on-the-fly arming/disarming
-      o->newline() << "#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,20)";
-      o->newline() << "INIT_WORK(&module_refresher_work, module_refresher, NULL);";
-      o->newline() << "#else";
       o->newline() << "INIT_WORK(&module_refresher_work, module_refresher);";
-      o->newline() << "#endif";
     }
 
   // Run all probe registrations.  This actually runs begin probes.
@@ -2192,7 +2184,11 @@ c_unparser::emit_module_refresh ()
   if (!session->runtime_usermode_p())
     {
       o->newline() << "#if defined(STP_TIMING)";
+      o->newline() << "#ifdef STP_TIMING_NSECS";
+      o->newline() << "s64 cycles_atstart = ktime_get_ns();";
+      o->newline() << "#else";
       o->newline() << "cycles_t cycles_atstart = get_cycles();";
+      o->newline() << "#endif";
       o->newline() << "#endif";
     }
 
@@ -2227,10 +2223,17 @@ c_unparser::emit_module_refresh ()
       // see also common_probe_entryfn_epilogue()
       o->newline() << "#if defined(STP_TIMING)";
       o->newline() << "if (likely(g_refresh_timing)) {";
+      o->newline() << "#ifdef STP_TIMING_NSECS";
+      o->newline(1) << "s64 cycles_atend = ktime_get_ns ();";
+      o->newline() << "s64 cycles_elapsed = ((s64)cycles_atend > (s64)cycles_atstart)";
+      o->newline(1) << "? ((s64)cycles_atend - (s64)cycles_atstart)";
+      o->newline() << ": (~(s64)0) - (s64)cycles_atstart + (s64)cycles_atend + 1;";
+      o->newline() << "#else";
       o->newline(1) << "cycles_t cycles_atend = get_cycles ();";
       o->newline() << "int32_t cycles_elapsed = ((int32_t)cycles_atend > (int32_t)cycles_atstart)";
       o->newline(1) << "? ((int32_t)cycles_atend - (int32_t)cycles_atstart)";
       o->newline() << ": (~(int32_t)0) - (int32_t)cycles_atstart + (int32_t)cycles_atend + 1;";
+      o->newline() << "#endif";
       o->indent(-1);
       // STP_TIMING requires min, max, avg (and thus count and sum) as well as variance.
       o->newline() << "_stp_stat_add(g_refresh_timing, cycles_elapsed, 1, 1, 1, 1, 1);";
@@ -2353,46 +2356,71 @@ c_unparser::emit_module_exit ()
 
   // print per probe point timing/alibi statistics
   o->newline() << "#if defined(STP_TIMING) || defined(STP_ALIBI)";
+  o->newline() << "#ifndef STP_STDOUT_NOT_ATTY";
   o->newline() << "_stp_printf(\"----- probe hit report: \\n\");";
+  o->newline() << "#endif"; // !defined(STP_STDOUT_NOT_ATTY)
   o->newline() << "for (i = 0; i < ARRAY_SIZE(stap_probes); ++i) {";
   o->newline(1) << "const struct stap_probe *const p = &stap_probes[i];";
+  o->newline() << "#ifndef STP_STDOUT_NOT_ATTY";
   o->newline() << "#ifdef STP_ALIBI";
   o->newline() << "int alibi = atomic_read(probe_alibi(i));";
   o->newline() << "if (alibi)";
   o->newline(1) << "_stp_printf (\"%s, (%s), hits: %d,%s, index: %d\\n\",";
   o->newline(2) << "p->pp, p->location, alibi, p->derivation, i);";
   o->newline(-3) << "#endif"; // STP_ALIBI
+  o->newline() << "#endif"; // !defined(STP_STDOUT_NOT_ATTY)
   o->newline() << "#ifdef STP_TIMING";
   o->newline() << "if (likely (probe_timing(i))) {"; // NB: check for null stat object
+  o->newline() << "#ifndef STP_STDOUT_NOT_ATTY";
   o->newline(1) << "struct stat_data *stats = _stp_stat_get (probe_timing(i), 0);";
   o->newline() << "if (stats->count) {";
   o->newline(1) << "int64_t avg = _stp_div64 (NULL, stats->sum, stats->count);";
-  o->newline() << "_stp_printf (\"%s, (%s), hits: %lld, "
-	       << (!session->runtime_usermode_p() ? "cycles" : "nsecs")
-	       << ": %lldmin/%lldavg/%lldmax, variance: %lld,%s, index: %d\\n\",";
-  o->newline(2) << "p->pp, p->location, (long long) stats->count,";
+  o->newline() << "_stp_printf (\"%s, (%s), hits: %lld, \"";
+  o->newline() << "#ifdef STP_TIMING_NSECS";
+  o->newline(2) << "\"nsecs\"";
+  o->newline(-2) << "#else";
+  o->newline(2) << (!session->runtime_usermode_p() ? "\"cycles\"" : "\"nsecs\"");
+  o->newline(-2) << "#endif";
+  o->newline(2) << "\": %lldmin/%lldavg/%lldmax, variance: %lld,%s, index: %d\\n\",";
+  o->newline() << "p->pp, p->location, (long long) stats->count,";
   o->newline() << "(long long) stats->min, (long long) avg, (long long) stats->max,";
   o->newline() << "(long long) stats->variance, p->derivation, i);";
   o->newline(-3) << "}";
+  o->newline() << "#endif"; // !defined(STP_STDOUT_NOT_ATTY)
+  o->newline() << "preempt_enable_no_resched();";
   o->newline() << "_stp_stat_del (probe_timing(i));";
+  o->newline() << "preempt_disable();";
   o->newline(-1) << "}";
   o->newline() << "#endif"; // STP_TIMING
   o->newline(-1) << "}";
 
   if (!session->runtime_usermode_p())
     {
-      o->newline() << "#if defined(STP_TIMING)";
+      o->newline() << "#if !defined(STP_STDOUT_NOT_ATTY) && defined(STP_TIMING)";
       o->newline() << "_stp_printf(\"----- refresh report:\\n\");";
       o->newline() << "if (likely (g_refresh_timing)) {";
       o->newline(1) << "struct stat_data *stats = _stp_stat_get (g_refresh_timing, 0);";
       o->newline() << "if (stats->count) {";
       o->newline(1) << "int64_t avg = _stp_div64 (NULL, stats->sum, stats->count);";
-      o->newline() << "_stp_printf (\"hits: %lld, cycles: %lldmin/%lldavg/%lldmax, "
-                   << "variance: %lld\\n\",";
-      o->newline(2) << "(long long) stats->count, (long long) stats->min, ";
+      o->newline() << "_stp_printf (\"hits: %lld, \"";
+      o->newline() << "#ifdef STP_TIMING_NSECS";
+      o->newline(2) << "\"nsecs\"";
+      o->newline(-2) << "#else";
+      o->newline(2) << "\"cycles\"";
+      o->newline(-2) << "#endif";
+      o->newline(2) << "\": %lldmin/%lldavg/%lldmax, variance: %lld\\n\",";
+      o->newline() << "(long long) stats->count, (long long) stats->min, ";
       o->newline() <<  "(long long) avg, (long long) stats->max, (long long) stats->variance);";
       o->newline(-3) << "}";
+      o->newline() << "preempt_enable_no_resched();";
       o->newline() << "_stp_stat_del (g_refresh_timing);";
+      o->newline() << "preempt_disable();";
+      o->newline(-1) << "}";
+      o->newline() << "#elif defined(STP_TIMING)"; // STP_TIMING
+      o->newline() << "if (likely (g_refresh_timing)) {";
+      o->newline(1) << "preempt_enable_no_resched();";
+      o->newline() << "_stp_stat_del (g_refresh_timing);";
+      o->newline() << "preempt_disable();";
       o->newline(-1) << "}";
       o->newline() << "#endif"; // STP_TIMING
     }
@@ -3953,10 +3981,25 @@ c_unparser::visit_block (block *s)
  
       // if needed, find the lock insertion site; instruct it to lock
       if (pushdown_lock_p(s))
-        for (unsigned i=0; i<s->statements.size(); i++)
-          if (locks_needed_p (s->statements[i]))
-            { pushdown_lock.insert(s->statements[i]); pushed_lock_down = true; break; }
-      
+        {
+          for (unsigned i=0; i<s->statements.size(); i++)
+            {
+              struct statement *stmt = s->statements[i];
+              if (locks_needed_p (stmt))
+                {
+                  pushed_lock_down = true;
+                  pushdown_lock.insert (stmt);
+
+                  if (! stmt->might_pushdown_lock ())
+                    {
+                      // now we know the subsquement stmts must have locks
+                      // held, so we don't bother going forward.
+                      break;
+                    }
+                }
+            }
+        }
+
       // if needed, find the unlock insertion site; instruct it to unlock
       if (pushdown_unlock_p(s))
         for (ssize_t i=s->statements.size()-1; i>=0; i--) // NB: traverse backward!
@@ -6609,6 +6652,8 @@ struct unwindsym_dump_context
   Dwarf_Addr eh_frame_hdr_addr;
   void *debug_line;
   size_t debug_line_len;
+  void *debug_line_str;
+  size_t debug_line_str_len;
 
   set<string> undone_unwindsym_modules;
 };
@@ -6809,9 +6854,13 @@ static void get_unwind_data (Dwfl_Module *m,
   scn = NULL;
   while ((scn = elf_nextscn(elf, scn)))
     {
+      const char *sh_name;
       shdr = gelf_getshdr(scn, &shdr_mem);
-      if (strcmp(elf_strptr(elf, ehdr->e_shstrndx, shdr->sh_name),
-		 ".debug_frame") == 0)
+      sh_name = elf_strptr(elf, ehdr->e_shstrndx, shdr->sh_name);
+      // decompression is done via dwarf_begin_elf / global_read / check_section
+      // / elf_compress_gnu / __libelf_decompress in libelf/elf_compress_gnu.c
+      if (strcmp(sh_name, ".debug_frame") == 0
+          || strcmp(sh_name, ".zdebug_frame") == 0)
 	{
 	  data = elf_rawdata(scn, NULL);
 	  *debug_frame = data->d_buf;
@@ -6978,9 +7027,13 @@ static void find_debug_frame_offset (Dwfl_Module *m,
 
   while ((scn = elf_nextscn(elf, scn)))
     {
+      const char *sh_name;
       shdr = gelf_getshdr(scn, &shdr_mem);
-      if (strcmp(elf_strptr(elf, ehdr->e_shstrndx, shdr->sh_name),
-		 ".debug_frame") == 0)
+      sh_name = elf_strptr(elf, ehdr->e_shstrndx, shdr->sh_name);
+      // decompression is done via dwarf_begin_elf / global_read / check_section
+      // / elf_compress_gnu / __libelf_decompress in libelf/elf_compress_gnu.c
+      if (strcmp(sh_name, ".debug_frame") == 0
+          || strcmp(sh_name, ".zdebug_frame") == 0)
 	{
 	  data = elf_rawdata(scn, NULL);
 	  break;
@@ -7056,6 +7109,16 @@ dump_line_tables_check (void *data, size_t data_len)
       version  = *((uint16_t *)ptr);
       ptr += 2;
 
+      // Need to skip over DWARF 5's address_size and segment_selector_size right
+      // to hdr_length (analogy to what happens in pass2's dump_line_tables_check()
+      // PR29984
+      if (version >= 5)
+      {
+        if (ptr + 2 > (uint8_t *)data + data_len)
+            return DWARF_CB_ABORT;
+        ptr += 2;
+      }
+
       if (unit_length <= (2 + length))
         return DWARF_CB_ABORT;
 
@@ -7120,16 +7183,28 @@ dump_line_tables (Dwfl_Module *m, unwindsym_dump_context *c,
   ehdr = gelf_getehdr(elf, &ehdr_mem);
   while ((scn = elf_nextscn(elf, scn)))
     {
+      const char *sh_name;
       shdr = gelf_getshdr(scn, &shdr_mem);
-      if (strcmp(elf_strptr(elf, ehdr->e_shstrndx, shdr->sh_name),
-                 ".debug_line") == 0)
+      sh_name = elf_strptr(elf, ehdr->e_shstrndx, shdr->sh_name);
+      // decompression is done via dwarf_begin_elf / global_read / check_section
+      // / elf_compress_gnu / __libelf_decompress in libelf/elf_compress_gnu.c
+      if (strcmp(sh_name, ".debug_line") == 0
+          || strcmp(sh_name, ".zdebug_line") == 0)
         {
           data = elf_rawdata(scn, NULL);
           if (dump_line_tables_check(data->d_buf, data->d_size) == DWARF_CB_ABORT)
             return;
           c->debug_line = data->d_buf;
           c->debug_line_len = data->d_size;
-          break;
+          continue;
+        }
+       if (strcmp(sh_name, ".debug_line_str") == 0
+           || strcmp(sh_name, ".zdebug_line_str") == 0)
+        {
+          data = elf_rawdata(scn, NULL);
+          c->debug_line_str = data->d_buf;
+          c->debug_line_str_len = data->d_size;
+          continue;
         }
     }
 
@@ -7408,9 +7483,6 @@ dump_unwindsym_cxt_table(systemtap_session& session, ostream& output,
 			 const string& secname, unsigned secindex,
 			 const string& table, void*& data, size_t& len)
 {
-  if (data == NULL || len == 0)
-    return;
-
   if (len > MAX_UNWIND_TABLE_SIZE)
     {
       if (secname.empty())
@@ -7470,6 +7542,8 @@ dump_unwindsym_cxt (Dwfl_Module *m,
   Dwarf_Addr eh_frame_hdr_addr = c->eh_frame_hdr_addr;
   void *debug_line = c->debug_line;
   size_t debug_line_len = c->debug_line_len;
+  void *debug_line_str = c->debug_line_str;
+  size_t debug_line_str_len = c->debug_line_str_len;
 
   dump_unwindsym_cxt_table(c->session, c->output, modname, stpmod_idx, "", 0,
 			   "debug_frame", debug_frame, debug_len);
@@ -7482,6 +7556,9 @@ dump_unwindsym_cxt (Dwfl_Module *m,
 
   dump_unwindsym_cxt_table(c->session, c->output, modname, stpmod_idx, "", 0,
 			   "debug_line", debug_line, debug_line_len);
+
+  dump_unwindsym_cxt_table(c->session, c->output, modname, stpmod_idx, "", 0,
+			   "debug_line_str", debug_line_str, debug_line_str_len);
 
   if (c->session.need_unwind && debug_frame == NULL && eh_frame == NULL)
     {
@@ -7498,6 +7575,13 @@ dump_unwindsym_cxt (Dwfl_Module *m,
     {
       if (c->session.verbose > 2)
         c->session.print_warning ("No debug line data for " + modname + ", " +
+                                  dwfl_errmsg (-1));
+    }
+
+  if (c->session.need_lines && debug_line_str == NULL)
+    {
+      if (c->session.verbose > 2)
+        c->session.print_warning ("No debug line str data for " + modname + ", " +
                                   dwfl_errmsg (-1));
     }
 
@@ -7681,11 +7765,19 @@ dump_unwindsym_cxt (Dwfl_Module *m,
       c->output << ".debug_line = "
 		<< "_stp_module_" << stpmod_idx << "_debug_line, \n";
       c->output << ".debug_line_len = " << debug_line_len << ", \n";
+      if (debug_line_str != NULL)
+        {
+          c->output << ".debug_line_str = "
+                    << "_stp_module_" << stpmod_idx << "_debug_line_str, \n";
+          c->output << ".debug_line_str_len = " << debug_line_str_len << ", \n";
+        }
       c->output << "#else\n";
     }
 
   c->output << ".debug_line = NULL,\n";
   c->output << ".debug_line_len = 0,\n";
+  c->output << ".debug_line_str = NULL,\n";
+  c->output << ".debug_line_str_len = 0,\n";
 
   if (debug_line != NULL)
     c->output << "#endif /* STP_NEED_LINE_DATA */\n";
@@ -7869,6 +7961,8 @@ dump_unwindsyms (Dwfl_Module *m,
 
   c->debug_line = NULL;
   c->debug_line_len = 0;
+  c->debug_line_str = NULL;
+  c->debug_line_str_len = 0;
   if (res == DWARF_CB_OK && c->session.need_lines)
     // we dont set res = dump_line_tables() because unwindsym stuff should still
     // get dumped to the output even if gathering debug_line data fails
@@ -8040,6 +8134,8 @@ emit_symbol_data (systemtap_session& s)
 				 0, /* eh_frame_hdr_addr */
 				 NULL, /* debug_line */
 				 0, /* debug_line_len */
+				 NULL, /* debug_line_str */
+				 0, /* debug_line_str_len */
 				 s.unwindsym_modules };
 
   // Micro optimization, mainly to speed up tiny regression tests
@@ -8135,6 +8231,8 @@ self_unwind_declarations(unwindsym_dump_context *ctx)
   ctx->output << ".debug_frame_len = 0,\n";
   ctx->output << ".debug_line = NULL,\n";
   ctx->output << ".debug_line_len = 0,\n";
+  ctx->output << ".debug_line_str = NULL,\n";
+  ctx->output << ".debug_line_str_len = 0,\n";
   ctx->output << "};\n";
 }
 
@@ -8366,6 +8464,12 @@ translate_pass (systemtap_session& s)
 
       if (s.timing || s.monitor)
 	s.op->hdr->newline() << "#define STP_TIMING";
+      if (!isatty(STDOUT_FILENO))
+        {
+          s.op->hdr->newline() << "#ifndef STP_FORCE_STDOUT_TTY";
+          s.op->hdr->newline() << "#define STP_STDOUT_NOT_ATTY";
+          s.op->hdr->newline() << "#endif";
+        }
 
       if (s.need_unwind)
 	s.op->hdr->newline() << "#define STP_NEED_UNWIND_DATA 1";
@@ -8407,9 +8511,7 @@ translate_pass (systemtap_session& s)
           // background timer (module_refresh_timer). We need to disable that
           // part if hrtimers are not supported.
           s.op->newline() << "#include <linux/version.h>";
-          s.op->newline() << "#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,17)";
           s.op->newline() << "#define STP_ON_THE_FLY_TIMER_ENABLE";
-          s.op->newline() << "#endif";
         }
 
       // Emit embeds ahead of time, in case they affect context layout
@@ -8422,6 +8524,8 @@ translate_pass (systemtap_session& s)
 
       if (s.need_unwind)
 	s.op->newline() << "#include \"stack.c\"";
+
+      s.op->newline() << "#include \"sym2.c\"";
 
       if (s.globals.size()>0)
 	{

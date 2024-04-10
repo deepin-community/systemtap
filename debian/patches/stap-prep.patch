@@ -2,7 +2,16 @@ Index: systemtap/stap-prep
 ===================================================================
 --- systemtap.orig/stap-prep
 +++ systemtap/stap-prep
-@@ -133,7 +133,11 @@ esac
+@@ -150,7 +150,7 @@ export DEBIAN_FRONTEND
+ case "$DISTRO" in 
+     Debian) # 2.6.32-39
+ 	if uname -v | grep -q Debian; then
+-	    VERSION="$(uname -v | cut -d " " -f 4)"
++	    VERSION="$(uname -v | grep -oE 'Debian ([0-9\.-]+)' | sed 's/Debian //')"
+ 	else
+             VERSION="$(cut -d " " -f 3 /proc/version)"
+ 	fi
+@@ -170,7 +170,11 @@ esac
      echo "linux-image-$ABINAME = $VERSION"
      echo "linux-headers-$ABINAME = $VERSION"
      if [ "$DEBUGINFOD" -eq 0 ]; then # add dbgsym search if not already 

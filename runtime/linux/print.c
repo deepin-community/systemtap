@@ -40,6 +40,8 @@ struct _stp_log {
 	char *buf; /* NB we don't use arrays here to avoid allocating memory
 		      on offline CPUs (but still possible ones) */
 	atomic_t reentrancy_lock;
+	bool no_flush;
+	bool is_full;
 };
 #include "print_flush.c"
 
@@ -238,6 +240,9 @@ static void * _stp_reserve_bytes (int numbytes)
 	if (unlikely(numbytes > (STP_BUFFER_SIZE - log->len)))
 		__stp_print_flush(log);
 
+	if (log->is_full)
+		return NULL;
+
 	ret = &log->buf[log->len];
 	log->len += numbytes;
 	return ret;
@@ -318,7 +323,7 @@ static void _stp_print (const char *str)
 		return;
 
 	log = per_cpu_ptr(_stp_log_pcpu, raw_smp_processor_id());
-	while (1) {
+	while (!log->is_full) {
 		while (log->len < STP_BUFFER_SIZE && *str)
 			log->buf[log->len++] = *str++;
 		if (likely(!*str))
@@ -339,7 +344,10 @@ static void _stp_print_char (const char c)
 	log = per_cpu_ptr(_stp_log_pcpu, raw_smp_processor_id());
 	if (unlikely(log->len == STP_BUFFER_SIZE))
 		__stp_print_flush(log);
-	log->buf[log->len++] = c;
+
+	if (likely(!log->no_flush || !log->is_full))
+		log->buf[log->len++] = c;
+
 	_stp_print_unlock_irqrestore(&flags);
 }
 
@@ -361,6 +369,11 @@ static void _stp_print_kernel_info(char *sname, char *vstr, int ctx, int num_pro
 	       (unsigned long) (THIS_MODULE->core_layout.size - THIS_MODULE->core_layout.text_size)/1024,
 	       (unsigned long) (THIS_MODULE->core_layout.text_size)/1024,
 #else
+#ifdef STAPCONF_MODULE_MEMORY
+	       (unsigned long) THIS_MODULE->mem[MOD_TEXT].base,
+	       (unsigned long) (THIS_MODULE->mem[MOD_DATA].size)/1024,
+	       (unsigned long) (THIS_MODULE->mem[MOD_TEXT].size)/1024,
+#else
 #ifndef STAPCONF_GRSECURITY
 	       (unsigned long) THIS_MODULE->module_core,
 	       (unsigned long) (THIS_MODULE->core_size - THIS_MODULE->core_text_size)/1024,
@@ -369,6 +382,7 @@ static void _stp_print_kernel_info(char *sname, char *vstr, int ctx, int num_pro
                (unsigned long) THIS_MODULE->module_core_rx,
 	       (unsigned long) (THIS_MODULE->core_size_rw - THIS_MODULE->core_size_rx)/1024,
                (unsigned long) (THIS_MODULE->core_size_rx)/1024,
+#endif
 #endif
 #endif
 	       ctx/1024,

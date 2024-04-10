@@ -236,23 +236,6 @@ static void _stp_handle_start(struct _stp_msg_start *st)
 	if (handle_startup) {
 		dbug_trans(1, "stp_handle_start\n");
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,23) // linux commit #5f4352fb
-#if LINUX_VERSION_CODE <  KERNEL_VERSION(2,6,29) // linux commit #9be260a6
-#ifdef STAPCONF_VM_AREA
-		{ /* PR9740: workaround for kernel valloc bug. */
-                  /* PR14611: not required except within above kernel range. */
-			void *dummy;
-#ifdef STAPCONF_VM_AREA_PTE
-			dummy = alloc_vm_area (PAGE_SIZE, NULL);
-#else
-			dummy = alloc_vm_area (PAGE_SIZE);
-#endif
-			free_vm_area (dummy);
-		}
-#endif
-#endif
-#endif
-
 		_stp_target = st->target;
 
 #if defined(CONFIG_USER_NS)
@@ -319,17 +302,35 @@ unsigned _stp_need_kallsyms_stext;
 // time:
 static int _stp_handle_kallsyms_lookups(void)
 {
+  might_sleep();
+
+#ifndef STAPCONF_NMI_UACCESS_OKAY
+  kallsyms_nmi_uaccess_okay = (void*) kallsyms_lookup_name ("nmi_uaccess_okay");
+  cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
+  if (kallsyms_nmi_uaccess_okay == NULL) {
+    /* Not finding this symbol is non-fatal for non-X86 architectures
+     * since nmi_uaccess_okay() does not do anything for non-X86 archs.
+     * Also, we don't treat it as fatal even on X86 since nmi_uaccess_okay()
+     * is a relatively new addition in upstream kernel commit 4012e77a90
+     * since Aug 2018.
+     */
+    ;
+  }
+#endif  /* STAPCONF_NMI_UACCESS_OKAY */
+
 #if !defined(STAPCONF_SET_FS)
   /* PR26811, missing copy_to_kernel_nofault symbol-export */
   kallsyms_copy_to_kernel_nofault = (void*) kallsyms_lookup_name ("copy_to_kernel_nofault");
+  cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
   /* Not finding this symbol is non-fatal. Kernel writes will fault safely: */
   if (kallsyms_copy_to_kernel_nofault == NULL) {
     ;
   }
 #endif
   /* PR13489, missing inode-uprobes symbol-export workaround */
-#if !defined(STAPCONF_TASK_USER_REGSET_VIEW_EXPORTED) && !defined(STAPCONF_UTRACE_REGSET) /* RHEL5 era utrace */
+#if !defined(STAPCONF_TASK_USER_REGSET_VIEW_EXPORTED) /* RHEL5 era utrace */
         kallsyms_task_user_regset_view = (void*) kallsyms_lookup_name ("task_user_regset_view");
+        cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
         /* There exist interesting kernel versions without task_user_regset_view(), like ARM before 3.0.
            For these kernels, uprobes etc. are out of the question, but plain kernel stap works fine.
            All we have to accomplish is have the loc2c runtime code compile.  For that, it's enough
@@ -341,8 +342,10 @@ static int _stp_handle_kallsyms_lookups(void)
 #if defined(CONFIG_UPROBES) // i.e., kernel-embedded uprobes
 #if !defined(STAPCONF_UPROBE_REGISTER_EXPORTED)
         kallsyms_uprobe_register = (void*) kallsyms_lookup_name ("uprobe_register");
+        cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
         if (kallsyms_uprobe_register == NULL) {
                 kallsyms_uprobe_register = (void*) kallsyms_lookup_name ("register_uprobe");
+                cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
         }
         if (kallsyms_uprobe_register == NULL) {
                 _stp_error("Can't resolve uprobe_register!");
@@ -351,8 +354,10 @@ static int _stp_handle_kallsyms_lookups(void)
 #endif
 #if !defined(STAPCONF_UPROBE_UNREGISTER_EXPORTED)
         kallsyms_uprobe_unregister = (void*) kallsyms_lookup_name ("uprobe_unregister");
+        cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
         if (kallsyms_uprobe_unregister == NULL) {
                 kallsyms_uprobe_unregister = (void*) kallsyms_lookup_name ("unregister_uprobe");
+                cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
         }
         if (kallsyms_uprobe_unregister == NULL) {
                 _stp_error("Can't resolve uprobe_unregister!");
@@ -361,6 +366,7 @@ static int _stp_handle_kallsyms_lookups(void)
 #endif
 #if !defined(STAPCONF_UPROBE_GET_SWBP_ADDR_EXPORTED)
         kallsyms_uprobe_get_swbp_addr = (void*) kallsyms_lookup_name ("uprobe_get_swbp_addr");
+        cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
         if (kallsyms_uprobe_get_swbp_addr == NULL) {
                 _stp_error("Can't resolve uprobe_get_swbp_addr!");
                 goto err0;
@@ -368,6 +374,7 @@ static int _stp_handle_kallsyms_lookups(void)
 #endif
 #if !defined(STAPCONF_GET_MM_EXE_FILE_EXPORTED) && (defined(get_file_rcu) || LINUX_VERSION_CODE >= KERNEL_VERSION(4,1,0))
         kallsyms_get_mm_exe_file = (void*) kallsyms_lookup_name ("get_mm_exe_file");
+        cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
         if (kallsyms_get_mm_exe_file == NULL) {
                 _stp_error("Can't resolve get_mm_exe_file!");
                 goto err0;
@@ -379,6 +386,7 @@ static int _stp_handle_kallsyms_lookups(void)
                 uint64_t address;
                 if (_stp_need_kallsyms_stext) {
                         address = kallsyms_lookup_name("_stext");
+                        cond_resched();  /* kallsyms_lookup_name is expensive; avoid blocking here */
                         _stp_set_stext(address);
                         _stp_need_kallsyms_stext = 0;
                 }
@@ -601,6 +609,7 @@ static int _stp_transport_init(void)
 #if defined(STAPCONF_KALLSYMS_ON_EACH_SYMBOL) && !defined(STAPCONF_KALLSYMS_ON_EACH_SYMBOL_EXPORTED)
         _stp_kallsyms_on_each_symbol = NULL;
 #endif
+        _stp_module_kallsyms_on_each_symbol = NULL;
 #if defined(CONFIG_KALLSYMS) && !defined(STAPCONF_KALLSYMS_LOOKUP_NAME_EXPORTED)
         _stp_need_kallsyms_stext = 0;
 #endif
@@ -679,12 +688,8 @@ static inline void _stp_lock_inode(struct inode *inode)
 #ifdef STAPCONF_INODE_RWSEM
 	inode_lock(inode);
 #else
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,16)
 	might_sleep();
 	mutex_lock(&inode->i_mutex);
-#else
-	down(&inode->i_sem);
-#endif
 #endif
 }
 
@@ -693,11 +698,7 @@ static inline void _stp_unlock_inode(struct inode *inode)
 #ifdef STAPCONF_INODE_RWSEM
 	inode_unlock(inode);
 #else
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,16)
 	mutex_unlock(&inode->i_mutex);
-#else
-	up(&inode->i_sem);
-#endif
 #endif
 }
 

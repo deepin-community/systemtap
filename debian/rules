@@ -33,7 +33,8 @@ override_dh_auto_test:
 	# Tests cannot be run during build, see #526957
 
 override_dh_auto_configure:
-	dh_auto_configure -- $(CONF_FLAGS)
+	# Build with g++-12 (see #1057205)
+	dh_auto_configure -- CXX=g++-12 $(CONF_FLAGS)
 
 override_dh_auto_install:
 	dh_auto_install
@@ -61,6 +62,9 @@ override_dh_auto_install:
 
 	# Remove empty file to make lintian happy, patch sent to xmlto upstream
 	rm -f debian/tmp/usr/share/doc/systemtap/tapsets/tapsets.proc
+
+	# Don't ship jupyter files
+	rm -rf debian/tmp/usr/bin/stap-jupyter-container debian/tmp/usr/bin/stap-jupyter-install debian/tmp/usr/share/systemtap/interactive-notebook/
 
 override_dh_install:
 	dh_install

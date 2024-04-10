@@ -2,12 +2,12 @@
 .\"     Title: probe::nfs.fop.release
 .\"    Author: 
 .\" Generator: DocBook XSL Stylesheets vsnapshot <http://docbook.sf.net/>
-.\"      Date: November 2022
+.\"      Date: November 2023
 .\"    Manual: Network File Storage Tapsets
 .\"    Source: SystemTap Tapset Reference
 .\"  Language: English
 .\"
-.TH "PROBE::NFS\&.FOP\&.R" "3stap" "November 2022" "SystemTap Tapset Reference" "Network File Storage Tapsets"
+.TH "PROBE::NFS\&.FOP\&.R" "3stap" "November 2023" "SystemTap Tapset Reference" "Network File Storage Tapsets"
 .\" -----------------------------------------------------------------
 .\" * Define some portability stuff
 .\" -----------------------------------------------------------------
@@ -36,9 +36,9 @@ nfs\&.fop\&.release
 .fi
 .SH "VALUES"
 .PP
-\fImode\fR
+\fIdev\fR
 .RS 4
-file mode
+device identifier
 .RE
 .PP
 \fIino\fR
@@ -46,9 +46,9 @@ file mode
 inode number
 .RE
 .PP
-\fIdev\fR
+\fImode\fR
 .RS 4
-device identifier
+file mode
 .RE
 .SH SEE ALSO\n 
 .IR tapset::nfs (3stap)

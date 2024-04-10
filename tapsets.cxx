@@ -130,7 +130,13 @@ common_probe_entryfn_prologue (systemtap_session& s,
     s.op->newline() << "#ifdef STP_TIMING";
 
   if (! s.runtime_usermode_p())
-    s.op->newline() << "cycles_t cycles_atstart = get_cycles ();";
+    {
+      s.op->newline() << "#ifdef STP_TIMING_NSECS";
+      s.op->newline() << "s64 cycles_atstart = ktime_get_ns ();";
+      s.op->newline() << "#else";
+      s.op->newline() << "cycles_t cycles_atstart = get_cycles ();";
+      s.op->newline() << "#endif";
+    }
   else
     {
     s.op->newline() << "struct timespec timespec_atstart;";
@@ -270,6 +276,18 @@ common_probe_entryfn_epilogue (systemtap_session& s,
   s.op->indent(1);
   if (! s.runtime_usermode_p())
     {
+      s.op->newline() << "#ifdef STP_TIMING_NSECS";
+
+      s.op->newline() << "s64 cycles_atend = ktime_get_ns ();";
+      // NB: we truncate nsecs to 64 bits.  Perhaps it should be
+      // fewer, if the hardware counter rolls over really quickly.  We
+      // handle 64-bit wraparound here.
+      s.op->newline() << "s64 cycles_elapsed = ((s64)cycles_atend > (s64)cycles_atstart)";
+      s.op->newline(1) << "? ((s64)cycles_atend - (s64)cycles_atstart)";
+      s.op->newline() << ": (~(s64)0) - (s64)cycles_atstart + (s64)cycles_atend + 1;";
+
+      s.op->newline() << "#else";
+
       s.op->newline() << "cycles_t cycles_atend = get_cycles ();";
       // NB: we truncate cycles counts to 32 bits.  Perhaps it should be
       // fewer, if the hardware counter rolls over really quickly.  We
@@ -277,6 +295,8 @@ common_probe_entryfn_epilogue (systemtap_session& s,
       s.op->newline() << "int32_t cycles_elapsed = ((int32_t)cycles_atend > (int32_t)cycles_atstart)";
       s.op->newline(1) << "? ((int32_t)cycles_atend - (int32_t)cycles_atstart)";
       s.op->newline() << ": (~(int32_t)0) - (int32_t)cycles_atstart + (int32_t)cycles_atend + 1;";
+
+      s.op->newline() << "#endif";
       s.op->indent(-1);
     }
   else
@@ -571,21 +591,21 @@ struct dwarf_derived_probe: public generic_kprobe_derived_probe
 
   // Pattern registration helpers.
   static void register_statement_variants(match_node * root,
-					  dwarf_builder * dw,
-					  privilege_t privilege);
+                                         dwarf_builder * dw,
+                                         privilege_t privilege);
   static void register_function_variants(match_node * root,
-					 dwarf_builder * dw,
-					 privilege_t privilege);
+                                        dwarf_builder * dw,
+                                        privilege_t privilege);
   static void register_function_and_statement_variants(systemtap_session& s,
-						       match_node * root,
-						       dwarf_builder * dw,
-						       privilege_t privilege);
+                                                      match_node * root,
+                                                      dwarf_builder * dw,
+                                                      privilege_t privilege);
   static void register_sdt_variants(systemtap_session& s,
-				    match_node * root,
-				    dwarf_builder * dw);
+                                   match_node * root,
+                                   dwarf_builder * dw);
   static void register_plt_variants(systemtap_session& s,
-				    match_node * root,
-				    dwarf_builder * dw);
+                                   match_node * root,
+                                   dwarf_builder * dw);
   static void register_patterns(systemtap_session& s);
 
 protected:
@@ -1256,7 +1276,11 @@ dwarf_query::handle_query_module()
   // in the symbol table but not in dwarf and minidebuginfo is
   // located in the gnu_debugdata section, alias_dupes checking
   // is done before adding any probe points
-  if(!pending_interrupts)
+  // PR29676.   Some probes require additional debuginfo
+  // to expand wildcards (ex. .label, .callee). Since the debuginfo is
+  // not available, don't bother looking in the symbol table for these results.
+  // This can result in 0 results, if there is no dwarf info present
+  if(!pending_interrupts && !(has_label || has_callee || has_callees_num))
     query_module_symtab();
 }
 
@@ -2449,8 +2473,9 @@ query_cu (Dwarf_Die * cudie, dwarf_query * q)
     }
   catch (const semantic_error& e)
     {
-      q->sess.print_error (e);
-      return DWARF_CB_ABORT;
+      // q->sess.print_error (e);
+      throw;
+      // return DWARF_CB_ABORT;
     }
 }
 
@@ -2497,14 +2522,20 @@ dwarf_query::query_module_functions ()
 }
 
 
-static void
-validate_module_elf (Dwfl_Module *mod, const char *name,  base_query *q)
+static bool
+validate_module_elf (systemtap_session& sess,
+                     Dwfl_Module *mod, const char *name,  base_query *q)
 {
   // Validate the machine code in this elf file against the
   // session machine.  This is important, in case the wrong kind
   // of debuginfo is being automagically processed by elfutils.
   // While we can tell i686 apart from x86-64, unfortunately
   // we can't help confusing i586 vs i686 (both EM_386).
+  //
+  // In case of a mismatch, soft-reject (ignore it with a warning).
+  // This is important in case of probing by buildid or mass
+  // debuginfod where some random architecture's module might come
+  // back.
 
   Dwarf_Addr bias;
   // We prefer dwfl_module_getdwarf to dwfl_module_getelf here,
@@ -2561,11 +2592,10 @@ validate_module_elf (Dwfl_Module *mod, const char *name,  base_query *q)
   if (fnmatch (expect_machine.c_str(), sess_machine.c_str(), 0) != 0 &&
       fnmatch (expect_machine2.c_str(), sess_machine.c_str(), 0) != 0)
     {
-      stringstream msg;
-      msg << _F("ELF machine %s|%s (code %d) mismatch with target %s in '%s'",
-                expect_machine.c_str(), expect_machine2.c_str(), elf_machine,
-                sess_machine.c_str(), debug_filename);
-      throw SEMANTIC_ERROR(msg.str ());
+      sess.print_warning (_F("ELF machine %s|%s (code %d) mismatch with target %s in '%s'",
+                             expect_machine.c_str(), expect_machine2.c_str(), elf_machine,
+                             sess_machine.c_str(), debug_filename));
+      return false;
     }
 
   if (q->sess.verbose>2)
@@ -2574,6 +2604,8 @@ validate_module_elf (Dwfl_Module *mod, const char *name,  base_query *q)
                q->dw.module_name.c_str(), q->dw.module_start, q->dw.module_end,
                q->dw.module_bias, debug_filename, expect_machine.c_str(),
                expect_machine2.c_str(), elf_machine);
+
+  return true;
 }
 
 
@@ -2645,7 +2677,10 @@ query_module (Dwfl_Module *mod,
         return pending_interrupts ? DWARF_CB_ABORT : DWARF_CB_OK;
 
       if (mod)
-        validate_module_elf(mod, name, q);
+        {
+          if (! validate_module_elf(q->sess, mod, name, q))
+            return DWARF_CB_OK;
+        }
       else
         assert(q->has_kernel);   // and no vmlinux to examine
 
@@ -2692,8 +2727,9 @@ query_module (Dwfl_Module *mod,
     }
   catch (const semantic_error& e)
     {
-      q->sess.print_error (e);
-      return DWARF_CB_ABORT;
+      // q->sess.print_error (e);
+      // return DWARF_CB_ABORT;
+      throw;
     }
 }
 
@@ -4742,10 +4778,15 @@ dwarf_var_expanding_visitor::visit_target_symbol (target_symbol *e)
 
       // Now that have location information check if change to variable has any effect
       if (lvalue) {
-	      if (liveness(q.sess, e, q.dw.mod_info->elf_path, addr, ctx) < 0) {
-		      q.sess.print_warning(_F("write at %p will have no effect",
-					      (void *)addr), e->tok);
-	      }
+        if (q.has_kernel &&
+            q.sess.kernel_config["CONFIG_RETPOLINE"] == string("y"))
+          q.sess.print_warning(_F("liveness analysis skipped on CONFIG_RETPOLINE kernel %s",
+                                  q.dw.mod_info->elf_path.c_str()), e->tok);
+        
+        else if (liveness(q.sess, e, q.dw.mod_info->elf_path, addr, ctx) < 0) {
+          q.sess.print_warning(_F("write at %p will have no effect",
+                                  (void *)addr), e->tok);
+        }
       }
 
       q.dw.sess.globals.insert(q.dw.sess.globals.end(),
@@ -5473,10 +5514,6 @@ kernel_supports_inode_uretprobes(systemtap_session& s)
 void
 check_process_probe_kernel_support(systemtap_session& s)
 {
-  // If we've got utrace, we're good to go.
-  if (s.kernel_config["CONFIG_UTRACE"] == "y")
-    return;
-
   // We don't have utrace.  For process probes that aren't
   // uprobes-based, we just need the task_finder.  The task_finder
   // needs CONFIG_TRACEPOINTS and specific tracepoints.  There is a
@@ -5494,7 +5531,7 @@ check_process_probe_kernel_support(systemtap_session& s)
       && kernel_supports_inode_uprobes(s))
     return;
 
-  throw SEMANTIC_ERROR (_("process probes not available without kernel CONFIG_UTRACE or CONFIG_TRACEPOINTS/CONFIG_ARCH_SUPPORTS_UPROBES/CONFIG_UPROBES"));
+  throw SEMANTIC_ERROR (_("process probes not available without kernel CONFIG_TRACEPOINTS/CONFIG_ARCH_SUPPORTS_UPROBES/CONFIG_UPROBES"));
 }
 
 
@@ -5692,7 +5729,8 @@ dwarf_derived_probe::dwarf_derived_probe(interned_string funcname,
       // Save the local variables for listing mode. If the scope_die is null,
       // local vars aren't accessible, so no need to invoke saveargs (PR10820).
       if (!null_die(scope_die) &&
-          q.sess.dump_mode == systemtap_session::dump_matched_probes_vars)
+          (q.sess.dump_mode == systemtap_session::dump_matched_probes_vars || 
+          q.sess.language_server_mode))
         saveargs(q, scope_die, dwfl_addr);
   }
 
@@ -9956,13 +9994,9 @@ uprobe_derived_probe_group::emit_module_utrace_exit (systemtap_session& s)
   // Do a pid->task_struct* lookup.  For 2.6.24+, this code assumes
   // that the pid is always in the global namespace, not in any
   // private namespace.
-  s.op->newline() << "#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24)";
   // We'd like to call find_task_by_pid_ns() here, but it isn't
   // exported.  So, we call what it calls...
   s.op->newline() << "  tsk = pid_task(find_pid_ns(pid, &init_pid_ns), PIDTYPE_PID);";
-  s.op->newline() << "#else";
-  s.op->newline() << "  tsk = find_task_by_pid (pid);";
-  s.op->newline() << "#endif /* 2.6.24 */";
 
   s.op->newline() << "if (tsk) {"; // just in case the thing exited while we weren't watching
   s.op->newline(1) << "if (__access_process_vm_noflush(tsk, sup->sdt_sem_address, &sdt_semaphore, sizeof(sdt_semaphore), 0)) {";
@@ -13174,12 +13208,12 @@ void
 register_standard_tapsets(systemtap_session & s)
 {
   register_tapset_been(s);
-  register_tapset_itrace(s);
   register_tapset_mark(s);
   register_tapset_procfs(s);
   register_tapset_timers(s);
   register_tapset_netfilter(s);
   register_tapset_utrace(s);
+  register_tapset_debuginfod(s);
 
   // dwarf-based kprobe/uprobe parts
   dwarf_derived_probe::register_patterns(s);

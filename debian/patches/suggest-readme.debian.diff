@@ -5,7 +5,7 @@ Index: systemtap/main.cxx
 ===================================================================
 --- systemtap.orig/main.cxx
 +++ systemtap/main.cxx
-@@ -1592,6 +1592,8 @@ main (int argc, char * const argv [])
+@@ -1617,6 +1617,8 @@ main (int argc, char * const argv [])
      cleanup (s, rc);
  
      assert_no_interrupts();
