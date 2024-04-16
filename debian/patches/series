@@ -3,3 +3,9 @@ suggest-readme.debian.diff
 dtrace-no-std-include-path.diff
 stap-prep.patch
 systemtap-ia64.patch
+staprun-fix-build-against-upcoming-gcc14.patch
+bpf-translate.cxx-fix-build-against-upcoming-gcc14.patch
+stapvirt.c-more-gcc-14-werror-calloc-transposed-args-compatibility.patch
+pr31288-build-with-gcc14.patch
+pr31288-build-with-gcc14-cont.patch
+pr31373-deal-with-the-removal-of-strlcpy-from-linux-6.8.patch
