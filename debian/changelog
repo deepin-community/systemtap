@@ -1,3 +1,14 @@
+systemtap (5.0-2deepin1) unstable; urgency=medium
+
+  * bpf-translate.cxx-fix-build-against-upcoming-gcc14.patch
+  * pr31288-build-with-gcc14-cont.patch
+  * pr31288-build-with-gcc14.patch
+  * pr31373-deal-with-the-removal-of-strlcpy-from-linux-6.8.patch
+  * staprun-fix-build-against-upcoming-gcc14.patch
+  * stapvirt.c-more-gcc-14-werror-calloc-transposed-args-compatibility.patch
+
+ -- LiChengGang <lichenggang@uniontech.com>  Wed, 10 Apr 2024 11:13:11 +0800
+
 systemtap (5.0-2) unstable; urgency=medium
 
   * Build with g++-12 to workaround FTBFS with g++-13 on i386, ppc64el,
