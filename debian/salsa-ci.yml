@@ -6,5 +6,8 @@ include:
 variables:
   SALSA_CI_DISABLE_BUILD_PACKAGE_ARM64: 0
 
+build i386:
+  allow_failure: true
+
 reprotest:
   allow_failure: true

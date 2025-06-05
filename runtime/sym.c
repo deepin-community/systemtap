@@ -368,9 +368,9 @@ static void _stp_filename_lookup_5(struct _stp_module *mod, char ** filename,
 
 #endif /* STP_NEED_LINE_DATA */
 
-unsigned long _stp_linenumber_lookup(unsigned long addr, struct task_struct *task,
-                                     char ** filename, int need_filename,
-                                     struct context *c)
+static unsigned long _stp_linenumber_lookup(unsigned long addr, struct task_struct *task,
+                                            char ** filename, int need_filename,
+                                            struct context *c)
 {
   struct _stp_module *m;
   struct _stp_section *sec;
@@ -379,6 +379,7 @@ unsigned long _stp_linenumber_lookup(unsigned long addr, struct task_struct *tas
   uint8_t *str_linep, *str_enddatap;
   int compat_task = _stp_is_compat_task();
   int user = (task ? 1 : 0);
+  unsigned long rel_off = 0;
 
 // the portion below is encased in this conditional because some of the functions
 // and constants needed are encased in a similar condition
@@ -394,6 +395,10 @@ unsigned long _stp_linenumber_lookup(unsigned long addr, struct task_struct *tas
                     addr &= ((compat_ulong_t) ~0);
 #endif
 	    m = _stp_umod_lookup(addr, task, &modname, NULL, NULL, NULL);
+	    // PR26843: In case the binary is PIE we need to relocate the addr
+	    // For non-PIE binaries the addr stays unchanged.
+	    if (m != NULL)
+	        addr = addr - _stp_umodule_relocate(m->path, rel_off, task);
     }
   else
     m = _stp_kmod_sec_lookup(addr, &sec);

@@ -1,0 +1,105 @@
+commit da72d04303cfc3ba22b2bb58a26f8dc7868333eb
+Author: William Cohen <wcohen@redhat.com>
+Date:   Mon Jun 3 14:23:08 2024 -0400
+
+    Avoid -Werror=empty-body errors from runtime/linux/debug.h macros
+    
+    When attempting to run the testsuite the sanity.exp test fails
+    due to the following -Werror=empty-body errors:
+    
+    /home/wcohen/systemtap_write/install/share/systemtap/runtime/transport/relay_v2.c: In function '__stp_relay_wakeup_timer':
+    /home/wcohen/systemtap_write/install/share/systemtap/runtime/linux/debug.h:47:36: error: suggest braces around empty body in an 'else' statement [-Werror=empty-body]
+       47 | #define dbug_trans(level, args...) ;
+          |                                    ^
+    /home/wcohen/systemtap_write/install/share/systemtap/runtime/transport/relay_v2.c:195:17: note: in expansion of macro 'dbug_trans'
+      195 |                 dbug_trans(0, "relay_v2 wakeup timer expiry\n");
+          |                 ^~~~~~~~~~
+    /home/wcohen/systemtap_write/install/share/systemtap/runtime/transport/symbols.c: In function '_stp_set_stext':
+    /home/wcohen/systemtap_write/install/share/systemtap/runtime/linux/debug.h:103:34: error: suggest braces around empty body in an 'else' statement [-Werror=empty-body]
+      103 | #define dbug_sym(level, args...) ;
+          |                                  ^
+    /home/wcohen/systemtap_write/install/share/systemtap/runtime/transport/symbols.c:44:17: note: in expansion of macro 'dbug_sym'
+       44 |                 dbug_sym(1, "found kernel _stext load address: 0x%lx\n",
+          |                 ^~~~~~~~
+    
+    Changed the effectively empty macros in runtime/linux/debug.h to use
+    "do { } while (0)" to eliminate these errors.
+
+diff --git a/runtime/linux/debug.h b/runtime/linux/debug.h
+index d2ab9e8db..dfc834dbb 100644
+--- a/runtime/linux/debug.h
++++ b/runtime/linux/debug.h
+@@ -44,8 +44,8 @@
+ 		printk(args);						\
+ 	} while (0)
+ #else
+-#define dbug_trans(level, args...) ;
+-#define dbug_trans2(args...) ;
++#define dbug_trans(level, args...) do { } while (0)
++#define dbug_trans2(args...) do { } while (0)
+ #endif
+ 
+ #ifdef DEBUG_STP_ON_THE_FLY
+@@ -53,7 +53,7 @@
+ 		_stp_dbug(__FUNCTION__, __LINE__, args);		\
+ 	} while (0)
+ #else
+-#define dbug_otf(args...) ;
++#define dbug_otf(args...) do { } while (0)
+ #endif
+ 
+ #ifdef DEBUG_UPROBES
+@@ -61,7 +61,7 @@
+ 		_stp_dbug(__FUNCTION__, __LINE__, args);		\
+ 	} while (0)
+ #else
+-#define dbug_uprobes(args...) ;
++#define dbug_uprobes(args...) do { } while (0)
+ #endif
+ 
+ #ifdef DEBUG_UNWIND /* stack unwinder */
+@@ -70,7 +70,7 @@
+ 			_stp_dbug(__FUNCTION__, __LINE__, args);	\
+ 	} while (0)
+ #else
+-#define dbug_unwind(level, args...) ;
++#define dbug_unwind(level, args...) do { } while (0)
+ #endif
+ 
+ 
+@@ -80,7 +80,7 @@
+ 			_stp_dbug(__FUNCTION__, __LINE__, args);    \
+ 	} while (0)
+ #else
+-#define dbug_task(level, args...) ;
++#define dbug_task(level, args...) do { } while (0)
+ #endif
+ 
+ 
+@@ -90,7 +90,7 @@
+                        _stp_dbug(__FUNCTION__, __LINE__, args);        \
+        } while (0)
+ #else
+-#define dbug_task_vma(level, args...) ;
++#define dbug_task_vma(level, args...) do { } while (0)
+ #endif
+ 
+ 
+@@ -100,7 +100,7 @@
+ 			_stp_dbug(__FUNCTION__, __LINE__, args);	\
+ 	} while (0)
+ #else
+-#define dbug_sym(level, args...) ;
++#define dbug_sym(level, args...) do { } while (0)
+ #endif
+ 
+ 
+@@ -110,7 +110,7 @@
+ 			_stp_dbug(__FUNCTION__, __LINE__, args);	\
+ 	} while (0)
+ #else
+-#define dbug_tp(level, args...) ;
++#define dbug_tp(level, args...) do { } while (0)
+ #endif
+ 
+ #endif /* _STP_LINUX_DEBUG_H_ */

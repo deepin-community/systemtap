@@ -11,8 +11,8 @@ Restrictions: needs-root rw-build-tree flaky isolation-machine
 
 Tests: build-hello
 Depends: systemtap
-Restrictions: rw-build-tree allow-stderr needs-root
+Restrictions: rw-build-tree needs-root
 
 Tests: list-coreutils-probe-points
-Depends: systemtap, coreutils-dbgsym
+Depends: systemtap
 Restrictions: needs-root

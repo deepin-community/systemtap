@@ -315,6 +315,7 @@ compile_pass (systemtap_session& s)
   o << "CHECK_BUILD := $(CC) -DMODULE $(NOSTDINC_FLAGS) $(KBUILD_CPPFLAGS) $(CPPFLAGS) "
     << "$(LINUXINCLUDE) $(_KBUILD_CFLAGS) $(CFLAGS_KERNEL) $(EXTRA_CFLAGS) "
     << "$(CFLAGS) -DKBUILD_BASENAME=\\\"" << s.module_name << "\\\" "
+    << "-Wmissing-prototypes "  // GCC14 prep, PR31288
     << WERROR << " -S -o /dev/null -xc " << endl;
   o << "stap_check_build = $(shell " << superverbose << " if $(CHECK_BUILD) $(1) "
     << redirecterrors << " ; then echo \"$(2)\"; else echo \"$(3)\"; fi)" << endl;
@@ -345,6 +346,8 @@ compile_pass (systemtap_session& s)
   // o << module_cflags << " += -Iusr/include" << endl;
   // since such headers are cleansed of _KERNEL_ pieces that we need
 
+  o << module_cflags << " += -Wmissing-prototypes" << endl; // GCC14 prep, PR31288
+  
   o << "STAPCONF_HEADER := " << s.tmpdir << "/" << s.stapconf_name << endl;
   o << ".DELETE_ON_ERROR: $(STAPCONF_HEADER)" << endl;
   o << "$(STAPCONF_HEADER):" << endl;
@@ -355,6 +358,7 @@ compile_pass (systemtap_session& s)
 
   vector<string> cs;  // to hold autoconf C file names
 
+  output_autoconf(s, o, cs, "autoconf-nsset-complete.c", "STAPCONF_NSSET_COMPLETE", NULL);
   output_autoconf(s, o, cs, "autoconf-d-real-inode.c", "STAPCONF_D_REAL_INODE", NULL);
   output_autoconf(s, o, cs, "autoconf-hrtimer-rel.c", "STAPCONF_HRTIMER_REL", NULL);
   output_exportconf(s, o2, "hrtimer_get_res", "STAPCONF_HRTIMER_GET_RES");
@@ -629,7 +633,7 @@ compile_pass (systemtap_session& s)
   o << "EXTRA_CFLAGS += -Wno-pragmas" << endl;
 
   // Suppress gcc12 diagnostic bug in kernel-devel for 5.16ish
-  o << "EXTRA_CFLAGS += -Wno-infinite-recursion" << endl;
+  o << "EXTRA_CFLAGS += $(call cc-option,-Wno-infinite-recursion)" << endl;
 
   // Suppress gcc12 diagnostic about STAP_KPROBE_PROBE_STR_* null checks
   o << "EXTRA_CFLAGS += -Wno-address" << endl;

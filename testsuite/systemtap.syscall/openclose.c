@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 // To test for glibc support for openat():
 //
@@ -22,13 +23,19 @@
 #if GLIBC_SUPPORT
 static inline int __open(const char* pathname, int flags, mode_t mode)
 {
+#if defined(__aarch64__) && defined(SYS_openat)
+  return syscall(SYS_openat, pathname, flags, mode);
+#else
   return syscall(SYS_open, pathname, flags, mode);
+#endif
 }
 #endif
 
 int main()
 {
   int fd1, fd2;
+
+  mlockall(MCL_CURRENT);
 
   fd2 = creat("foobar1",S_IREAD|S_IWRITE);
   //staptest// [[[[[[[[open (!!!!openat (AT_FDCWD, ]]]]"foobar1", O_WRONLY|O_CREAT[[[[.O_LARGEFILE]]]]?|O_TRUNC!!!!creat ("foobar1"]]]], 0600) = NNNN

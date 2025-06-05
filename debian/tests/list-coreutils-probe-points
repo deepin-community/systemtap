@@ -1,7 +1,12 @@
 #!/bin/sh
 
+echo "deb http://deb.debian.org/debian-debug/ $(lsb_release -cs)-debug main" > /etc/apt/sources.list.d/coreutils.debug.list
+apt-get update
+
 arch="$(uname -r | egrep -o '[a-z0-9]+$')"
-apt-get -y install linux-headers-${arch} linux-image-${arch}-dbg
+apt-get -y install linux-headers-${arch} linux-image-${arch}-dbg coreutils-dbgsym 2>&1
+
+rm /etc/apt/sources.list.d/coreutils.debug.list
 
 target_kernel="$(dpkg -l linux-headers-\* | awk '/^ii/ { print $2 ; exit }' | sed s/linux-headers-//)"
 

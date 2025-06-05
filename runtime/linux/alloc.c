@@ -16,11 +16,28 @@
 
 static long _stp_allocated_net_memory = 0;
 /* Default, and should be "safe" from anywhere. */
-#define STP_ALLOC_FLAGS ((GFP_KERNEL | __GFP_NORETRY | __GFP_NOWARN) \
-			 & ~__GFP_WAIT)
+/* NB: GFP_NOWAIT is defined since kernel 2.6.37 */
+#define STP_ALLOC_FLAGS (GFP_NOWAIT | __GFP_NORETRY | __GFP_NOWARN)
 /* May only be used in context that can sleep. __GFP_NORETRY is to
    suppress the oom-killer from kicking in. */
 #define STP_ALLOC_SLEEP_FLAGS (GFP_KERNEL | __GFP_NORETRY)
+
+#ifdef __GFP_DIRECT_RECLAIM
+
+#define STP_ALLOC_FLAGS_MIGHT_SLEEP(flags)  \
+	((flags) & (__GFP_DIRECT_RECLAIM | __GFP_IO | __GFP_FS))
+
+#elif defined(__GFP_WAIT)
+
+#define STP_ALLOC_FLAGS_MIGHT_SLEEP(flags)  \
+	((flags) & (__GFP_WAIT | __GFP_IO | __GFP_FS))
+
+#elif defined(__GFP_RECLAIM)
+
+#define STP_ALLOC_FLAGS_MIGHT_SLEEP(flags)  \
+	((flags) & (__GFP_RECLAIM | __GFP_IO | __GFP_FS))
+
+#endif
 
 /* #define DEBUG_MEMALLOC_MIGHT_SLEEP */
 /*
@@ -48,7 +65,22 @@ static long _stp_allocated_net_memory = 0;
 static long _stp_allocated_memory = 0;
 
 #ifdef DEBUG_MEM
+
+#define STRINGIZE(x) STRINGIZE2(x)
+#define STRINGIZE2(x) #x
+#define LINE_STRING STRINGIZE(__LINE__)
+#define MTAG  _stp_curr_debug_mem_tag = __FILE__ ":" LINE_STRING;
+
+#else
+
+#define MTAG
+
+#endif
+
+#ifdef DEBUG_MEM
 static STP_DEFINE_SPINLOCK(_stp_mem_lock);
+
+static const char *_stp_curr_debug_mem_tag = NULL;
 
 #define STP_MEM_MAGIC 0xc11cf77f
 #define MEM_FENCE_SIZE 32
@@ -72,6 +104,7 @@ struct _stp_mem_entry {
 	enum _stp_memtype type;
 	size_t len;
 	void *addr;
+	const char *tag;
 };
 
 #define MEM_DEBUG_SIZE (2*MEM_FENCE_SIZE+sizeof(struct _stp_mem_entry))
@@ -117,6 +150,7 @@ static void *_stp_mem_debug_setup(void *addr, size_t size, enum _stp_memtype typ
 	m->type = type;
 	m->len = size;
 	m->addr = addr;
+	m->tag = _stp_curr_debug_mem_tag;
 	stp_spin_lock_irqsave(&_stp_mem_lock, flags);
 	list_add(p, &_stp_mem_list); 
 	stp_spin_unlock_irqrestore(&_stp_mem_lock, flags);
@@ -284,7 +318,9 @@ static void *_stp_kmalloc_gfp(size_t size, gfp_t gfp_mask)
 {
 	void *ret;
 #ifdef DEBUG_MEMALLOC_MIGHT_SLEEP
-	might_sleep();
+	if (STP_ALLOC_FLAGS_MIGHT_SLEEP(gfp_mask)) {
+		might_sleep();
+	}
 #endif
 #ifdef STP_MAXMEMORY
 	if ((_STP_MODULE_CORE_SIZE + _stp_allocated_memory + size)
@@ -500,7 +536,9 @@ static void *_stp_kmalloc_node_gfp(size_t size, int node, gfp_t gfp_mask)
 {
 	void *ret;
 #ifdef DEBUG_MEMALLOC_MIGHT_SLEEP
-	might_sleep();
+	if (STP_ALLOC_FLAGS_MIGHT_SLEEP(gfp_mask)) {
+		might_sleep();
+	}
 #endif
 #ifdef STP_MAXMEMORY
 	if ((_STP_MODULE_CORE_SIZE + _stp_allocated_memory + size)
@@ -536,7 +574,9 @@ static void *_stp_kzalloc_node_gfp(size_t size, int node, gfp_t gfp_mask)
 	 */
 	void *ret = _stp_kmalloc_node_gfp(size, node, gfp_mask);
 #ifdef DEBUG_MEMALLOC_MIGHT_SLEEP
-	might_sleep();
+	if (STP_ALLOC_FLAGS_MIGHT_SLEEP(gfp_mask)) {
+		might_sleep();
+	}
 #endif
 	if (likely(ret)) {
 		memset (ret, 0, size);
@@ -555,9 +595,6 @@ static void *_stp_kzalloc_node(size_t size, int node)
 
 static void _stp_kfree(void *addr)
 {
-#ifdef DEBUG_MEMALLOC_MIGHT_SLEEP
-	might_sleep();
-#endif
 #ifdef DEBUG_MEM
 	_stp_mem_debug_free(addr, STP_MEM_KMALLOC);
 #else
@@ -579,9 +616,6 @@ static void _stp_vfree(void *addr)
 
 static void _stp_free_percpu(void *addr)
 {
-#ifdef DEBUG_MEMALLOC_MIGHT_SLEEP
-	might_sleep();
-#endif
 #ifdef DEBUG_MEM
 	_stp_mem_debug_free(addr, STP_MEM_PERCPU);
 #else
@@ -601,8 +635,9 @@ static void _stp_mem_debug_done(void)
 		m = list_entry(p, struct _stp_mem_entry, list);
 		list_del(p);
 
-		printk("SYSTEMTAP ERROR: Memory %p len=%d allocation type: %s. Not freed.\n", 
-		       m->addr, (int)m->len, _stp_malloc_types[m->type].alloc);
+		printk("SYSTEMTAP ERROR: Memory %p len=%d tag=%s allocation type: %s. Not freed.\n",
+		       m->addr, (int)m->len, m->tag ? m->tag : "",
+		       _stp_malloc_types[m->type].alloc);
 
 		if (m->magic != STP_MEM_MAGIC) {
 			printk("SYSTEMTAP ERROR: Memory at %p len=%d corrupted!!\n", m->addr, (int)m->len);

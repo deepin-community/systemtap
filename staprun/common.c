@@ -28,6 +28,8 @@ int verbose;
 int suppress_warnings;
 int target_pid;
 int target_namespaces_pid;
+int target_mnt_ns_fd = -1;
+int orig_mnt_ns_fd = -1;
 unsigned int buffer_size;
 unsigned int reader_timeout_ms;
 char *target_cmd;
@@ -230,7 +232,7 @@ void parse_args(int argc, char **argv)
 		case 'V':
                         /* PRERELEASE */
                         printf(_("Systemtap module loader/runner (version %s, %s)\n"
-                              "Copyright (C) 2005-2023 Red Hat, Inc. and others\n"
+                              "Copyright (C) 2005-2024 Red Hat, Inc. and others\n"
                               "This is free software; see the source for copying conditions.\n"),
                             VERSION, STAP_EXTENDED_VERSION);
                         _exit(0);

@@ -1,0 +1,13 @@
+diff --git a/session.cxx b/session.cxx
+index 3a217de3e..545505195 100644
+--- a/session.cxx
++++ b/session.cxx
+@@ -2178,7 +2178,7 @@ systemtap_session::parse_kernel_exports ()
+ int
+ systemtap_session::parse_kernel_functions ()
+ {
+-  string system_map_path = kernel_build_tree + "/System.map";
++  string system_map_path = "/usr/lib/debug/boot/System.map-" + kernel_release;
+   ifstream system_map;
+ 
+   system_map.open(system_map_path.c_str(), ifstream::in);

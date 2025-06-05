@@ -39,8 +39,16 @@ static void __stp_print_flush(struct _stp_log *log)
         /* try to reserve header + len */
         bytes_reserved = _stp_data_write_reserve(hlen+len,
                                                  &entry);
+	if (bytes_reserved > 0 && bytes_reserved < hlen){
+	  /* Cannot have header straddle sub buffers. */
+	  /* Pad out that remainder of the subbuf and try again */
+	  memset(entry, 0, bytes_reserved);
+	  bytes_reserved = _stp_data_write_reserve(hlen+len,
+						   &entry);
+	}
+
         /* require at least header to fit in its entirety */
-        if (likely(entry && bytes_reserved > hlen)) {
+        if (likely(entry && bytes_reserved >= hlen)) {
                 /* copy new _stp_trace_ header */
                 struct _stp_trace t = {
                         .magic = STAP_TRACE_MAGIC,

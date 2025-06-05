@@ -17,6 +17,31 @@
 
 #include <linux/spinlock.h>
 
+#ifndef STAP_SPIN_TRYLOCK_MAX_COUNT
+#define STAP_SPIN_TRYLOCK_MAX_COUNT  5000
+#endif
+
+#define stp_nmi_spin_lock_irqsave(lock, flags, label) \
+	if (in_nmi()) { \
+		long i; \
+		for (i = 0; i < STAP_SPIN_TRYLOCK_MAX_COUNT; i++) { \
+			if (stp_spin_trylock(lock))  \
+				break; \
+		} \
+		if (unlikely(i >= STAP_SPIN_TRYLOCK_MAX_COUNT)) { \
+			goto label; \
+		} \
+	} else { \
+		stp_spin_lock_irqsave(lock, flags); \
+	}
+
+#define stp_nmi_spin_unlock_irqrestore(lock, flags) \
+	if (in_nmi()) { \
+		stp_spin_unlock(lock); \
+	} else { \
+		stp_spin_unlock_irqrestore(lock, flags); \
+	}
+
 #if defined(CONFIG_PREEMPT_RT_FULL) || defined(CONFIG_PREEMPT_RT)
 
 #define stp_spinlock_t raw_spinlock_t
@@ -28,6 +53,7 @@ static inline void stp_spin_lock_init(raw_spinlock_t *lock)	{ raw_spin_lock_init
 static inline void stp_spin_lock(raw_spinlock_t *lock)		{ raw_spin_lock(lock); }
 static inline void stp_spin_unlock(raw_spinlock_t *lock)	{ raw_spin_unlock(lock); }
 
+#define stp_spin_trylock(lock)		raw_spin_trylock(lock)
 #define stp_spin_lock_irqsave(lock, flags)		raw_spin_lock_irqsave(lock, flags)
 #define stp_spin_unlock_irqrestore(lock, flags)		raw_spin_unlock_irqrestore(lock, flags)
 
@@ -61,6 +87,7 @@ static inline void stp_spin_lock_init(spinlock_t *lock)		{ spin_lock_init(lock);
 static inline void stp_spin_lock(spinlock_t *lock)		{ spin_lock(lock); }
 static inline void stp_spin_unlock(spinlock_t *lock)		{ spin_unlock(lock); }
 
+#define stp_spin_trylock(lock)		spin_trylock(lock)
 #define stp_spin_lock_irqsave(lock, flags)		spin_lock_irqsave(lock, flags)
 #define stp_spin_unlock_irqrestore(lock, flags)		spin_unlock_irqrestore(lock, flags)
 
