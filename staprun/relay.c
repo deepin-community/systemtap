@@ -251,7 +251,9 @@ static void* reader_thread_serialmode (void *data)
                    keep on reading & shifting the header, one byte at
                    a time, until we get a match. */
                 while (! stop_threads && memcmp(message.bufhdr.magic, STAP_TRACE_MAGIC, 4)) {
-                        lost_byte_count ++;
+                        /* Do not count padding bytes */
+                        if ((* (&message.bufhdr_raw[0])) != '\0')
+                           lost_byte_count ++;
                         memmove(& message.bufhdr_raw[0],
                                 & message.bufhdr_raw[1],
                                 sizeof(message.bufhdr_raw)-1);
@@ -814,6 +816,7 @@ int init_relayfs(void)
 void close_relayfs(void)
 {
 	int i;
+	usleep(reader_timeout_ms*2*1000); /* PR31597, delay to drain buffers */
 	stop_threads = 1;
 	dbug(2, "closing\n");
 

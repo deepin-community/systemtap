@@ -286,7 +286,7 @@ common_probe_entryfn_epilogue (systemtap_session& s,
       s.op->newline(1) << "? ((s64)cycles_atend - (s64)cycles_atstart)";
       s.op->newline() << ": (~(s64)0) - (s64)cycles_atstart + (s64)cycles_atend + 1;";
 
-      s.op->newline() << "#else";
+      s.op->newline(-1) << "#else";
 
       s.op->newline() << "cycles_t cycles_atend = get_cycles ();";
       // NB: we truncate cycles counts to 32 bits.  Perhaps it should be
@@ -10762,11 +10762,13 @@ struct hwbkpt_derived_probe: public derived_probe
 			unsigned int len,
 			bool has_only_read_access,
 			bool has_only_write_access,
-			bool has_rw_access
+			bool has_rw_access,
+			bool is_kernel
                         );
   Dwarf_Addr hwbkpt_addr;
   string symbol_name;
   unsigned int hwbkpt_access,hwbkpt_len;
+  bool kernel_p;
 
   void printsig (std::ostream &o) const;
   void join_group (systemtap_session& s);
@@ -10795,11 +10797,13 @@ hwbkpt_derived_probe::hwbkpt_derived_probe (probe *base,
                                             unsigned int len,
                                             bool has_only_read_access,
                                             bool has_only_write_access,
-                                            bool):
+                                            bool,
+                                            bool is_kernel):
   derived_probe (base, location, true /* .components soon rewritten */ ),
   hwbkpt_addr (addr),
   symbol_name (symname),
-  hwbkpt_len (len)
+  hwbkpt_len (len),
+  kernel_p(is_kernel)
 {
   this->tok = base->tok;
 
@@ -10863,6 +10867,7 @@ hwbkpt_derived_probe_group::emit_module_decls (systemtap_session& s)
 
   s.op->newline() << "#include <linux/perf_event.h>";
   s.op->newline() << "#include <linux/hw_breakpoint.h>";
+  s.op->newline() << "#include <linux/stap-hw-breakpoint.h>";
   s.op->newline();
 
   // Forward declare the main entry functions
@@ -10882,28 +10887,17 @@ hwbkpt_derived_probe_group::emit_module_decls (systemtap_session& s)
   s.op->newline() << "static struct perf_event_attr ";
   s.op->newline() << "stap_hwbkpt_probe_array[" << hwbkpt_probes.size() << "];";
 
-  s.op->newline() << "static struct perf_event **";
+  s.op->newline() << "static void *";
   s.op->newline() << "stap_hwbkpt_ret_array[" << hwbkpt_probes.size() << "];";
-  s.op->newline() << "static struct stap_hwbkpt_probe {";
-  s.op->newline() << "int registered_p:1;";
-// registered_p =  0 signifies a probe that is unregistered (or failed)
-// registered_p =  1 signifies a probe that got registered successfully
-
-  // Symbol Names are mostly small and uniform enough
-  // to justify putting const char*.
-  s.op->newline() << "const char * const symbol;";
-
-  s.op->newline() << "const unsigned long address;";
-  s.op->newline() << "uint8_t atype;";
-  s.op->newline() << "unsigned int len;";
-  s.op->newline() << "const struct stap_probe * const probe;";
-  s.op->newline() << "} stap_hwbkpt_probes[] = {";
+  s.op->newline() << "static struct stap_hwbkpt_probe stap_hwbkpt_probes[] = {";
   s.op->indent(1);
 
   for (unsigned int it = 0; it < hwbkpt_probes.size(); it++)
     {
       hwbkpt_derived_probe* p = hwbkpt_probes.at(it);
       s.op->newline() << "{";
+      if (p->kernel_p)
+        s.op->line() << " .kernel_p=1" << ",";
       if (p->symbol_name.size())
       s.op->line() << " .address=(unsigned long)0x0" << "ULL,";
       else
@@ -10964,73 +10958,17 @@ hwbkpt_derived_probe_group::emit_module_decls (systemtap_session& s)
 void
 hwbkpt_derived_probe_group::emit_module_init (systemtap_session& s)
 {
-  s.op->newline() << "for (i=0; i<" << hwbkpt_probes.size() << "; i++) {";
-  s.op->newline(1) << "struct stap_hwbkpt_probe *skp = & stap_hwbkpt_probes[i];";
-  s.op->newline() << "struct perf_event_attr *hp = & stap_hwbkpt_probe_array[i];";
-  s.op->newline() << "void *addr = (void *) skp->address;";
-  s.op->newline() << "const char *hwbkpt_symbol_name = addr ? NULL : skp->symbol;";
-  s.op->newline() << "hw_breakpoint_init(hp);";
-  s.op->newline() << "if (addr)";
-  s.op->newline(1) << "hp->bp_addr = (unsigned long) addr;";
-  s.op->newline(-1) << "else { ";
-  s.op->newline(1) << "hp->bp_addr = kallsyms_lookup_name(hwbkpt_symbol_name);";
-  s.op->newline() << "if (!hp->bp_addr) { ";
-  s.op->newline(1) << "_stp_warn(\"Probe %s registration skipped: invalid symbol %s \",skp->probe->pp,hwbkpt_symbol_name);";
-  s.op->newline() << "continue;";
-  s.op->newline(-1) << "}";
-  s.op->newline(-1) << "}";
-  s.op->newline() << "hp->bp_type = skp->atype;";
-
-  // Convert actual len to bp len.
-  s.op->newline() << "switch(skp->len) {";
-  s.op->newline() << "case 1:";
-  s.op->newline(1) << "hp->bp_len = HW_BREAKPOINT_LEN_1;";
-  s.op->newline() << "break;";
-  s.op->newline(-1) << "case 2:";
-  s.op->newline(1) << "hp->bp_len = HW_BREAKPOINT_LEN_2;";
-  s.op->newline() << "break;";
-  s.op->newline(-1) << "case 3:";
-  s.op->newline() << "case 4:";
-  s.op->newline(1) << "hp->bp_len = HW_BREAKPOINT_LEN_4;";
-  s.op->newline() << "break;";
-  s.op->newline(-1) << "case 5:";
-  s.op->newline() << "case 6:";
-  s.op->newline() << "case 7:";
-  s.op->newline() << "case 8:";
-  s.op->newline() << "default:"; // XXX: could instead reject
-  s.op->newline(1) << "hp->bp_len = HW_BREAKPOINT_LEN_8;";
-  s.op->newline() << "break;";
-  s.op->newline(-1) << "}";
-
-  s.op->newline() << "probe_point = skp->probe->pp;"; // for error messages
-  s.op->newline() << "#ifdef STAPCONF_HW_BREAKPOINT_CONTEXT";
-  s.op->newline() << "stap_hwbkpt_ret_array[i] = register_wide_hw_breakpoint(hp, &enter_hwbkpt_probe, NULL);";
-  s.op->newline() << "#else";
-  s.op->newline() << "stap_hwbkpt_ret_array[i] = register_wide_hw_breakpoint(hp, &enter_hwbkpt_probe);";
-  s.op->newline() << "#endif";
-  s.op->newline() << "rc = 0;";
-  s.op->newline() << "if (IS_ERR(stap_hwbkpt_ret_array[i])) {";
-  s.op->newline(1) << "rc = PTR_ERR(stap_hwbkpt_ret_array[i]);";
-  s.op->newline() << "stap_hwbkpt_ret_array[i] = 0;";
-  s.op->newline(-1) << "}";
-  s.op->newline() << "if (rc) {";
-  s.op->newline(1) << "_stp_warn(\"Hwbkpt probe %s: registration error [man warning::pass5] %d, addr %p, name %s\", probe_point, rc, addr, hwbkpt_symbol_name);";
-  s.op->newline() << "skp->registered_p = 0;";
-  s.op->newline(-1) << "}";
-  s.op->newline() << " else skp->registered_p = 1;";
-  s.op->newline(-1) << "}"; // for loop
+  s.op->newline() << "rc = stap_hwbkpt_init(&enter_hwbkpt_probe, stap_hwbkpt_probes, "
+    << hwbkpt_probes.size() << ", stap_hwbkpt_probe_array, "
+    << "stap_hwbkpt_ret_array, &probe_point);";
 }
 
 void
 hwbkpt_derived_probe_group::emit_module_exit (systemtap_session& s)
 {
   //Unregister hwbkpt probes.
-  s.op->newline() << "for (i=0; i<" << hwbkpt_probes.size() << "; i++) {";
-  s.op->newline(1) << "struct stap_hwbkpt_probe *skp = & stap_hwbkpt_probes[i];";
-  s.op->newline() << "if (skp->registered_p == 0) continue;";
-  s.op->newline() << "unregister_wide_hw_breakpoint(stap_hwbkpt_ret_array[i]);";
-  s.op->newline() << "skp->registered_p = 0;";
-  s.op->newline(-1) << "}";
+  s.op->newline() << "stap_hwbkpt_exit(stap_hwbkpt_probes, "
+    << hwbkpt_probes.size() << ", stap_hwbkpt_ret_array);";
 }
 
 
@@ -11050,7 +10988,9 @@ warn_for_bpf(systemtap_session& s, hwbkpt_derived_probe_group *hpg,
 
 struct hwbkpt_builder: public derived_probe_builder
 {
-  hwbkpt_builder() {}
+  bool kernel_p;
+
+  hwbkpt_builder(bool is_kernel): kernel_p(is_kernel) {}
   virtual void build(systemtap_session & sess,
 		     probe * base,
 		     probe_point * location,
@@ -11081,7 +11021,8 @@ hwbkpt_builder::build(systemtap_session & sess,
   // See BZ1431263 (on aarch64, running the hw_watch_addr.stp
   // systemtap examples cause a stuck CPU).
   if (sess.architecture == string("arm64"))
-      throw SEMANTIC_ERROR (_("kernel.data probes are not supported on arm64 kernels"),
+      throw SEMANTIC_ERROR (_F("%s.data probes are not supported on arm64 kernels",
+                               kernel_p ? "kernel" : "process"),
                             location->components[0]->tok);
 
   has_addr = get_param (parameters, TOK_HWBKPT, hwbkpt_address);
@@ -11115,14 +11056,16 @@ hwbkpt_builder::build(systemtap_session & sess,
 							    hwbkpt_address,
 							    "",len,0,
 							    has_write,
-							    has_rw));
+							    has_rw,
+							    kernel_p));
   else if (has_symbol_str)
       finished_results.push_back (new hwbkpt_derived_probe (new_base,
 							    location,
 							    0,
 							    symbol_str_val,len,0,
 							    has_write,
-							    has_rw));
+							    has_rw,
+							    kernel_p));
   else
     assert (0);
 }
@@ -12286,6 +12229,7 @@ tracepoint_derived_probe_group::emit_module_decls (systemtap_session& s)
       if (used_args.empty())
         {
           tpop->newline() << "STP_TRACE_ENTER_REAL_NOARGS(" << enter_real_fn << ");";
+          s.op->newline() << "STP_TRACE_ENTER_REAL_NOARGS(" << enter_real_fn << ");";
           s.op->newline() << "STP_TRACE_ENTER_REAL_NOARGS(" << enter_real_fn << ")";
         }
       else
@@ -12299,6 +12243,14 @@ tracepoint_derived_probe_group::emit_module_decls (systemtap_session& s)
               s.op->newline() << ", int64_t __tracepoint_arg_" << used_args[j]->name;
             }
           tpop->line() << ");";
+          s.op->newline() << ");";
+          s.op->indent(-2);
+          s.op->newline() << "STP_TRACE_ENTER_REAL(" << enter_real_fn;
+          s.op->indent(2);
+          for (unsigned j = 0; j < used_args.size(); ++j)
+            {
+              s.op->newline() << ", int64_t __tracepoint_arg_" << used_args[j]->name;
+            }
           s.op->newline() << ")";
           s.op->indent(-2);
         }
@@ -12351,6 +12303,8 @@ tracepoint_derived_probe_group::emit_module_decls (systemtap_session& s)
 
 
       // emit normalized registration functions
+      s.op->newline() << "int register_tracepoint_probe_" << i << "(void);";
+      tpop->newline() << "int register_tracepoint_probe_" << i << "(void);" << endl;
       tpop->newline() << "int register_tracepoint_probe_" << i << "(void) {";
       tpop->newline(1) << "return STP_TRACE_REGISTER(" << p->tracepoint_name
                        << ", " << enter_fn << ");";
@@ -12360,15 +12314,15 @@ tracepoint_derived_probe_group::emit_module_decls (systemtap_session& s)
       // can only occur if the tracepoint doesn't exist (yet?), or if we
       // weren't even registered.  The former should be OKed by the initial
       // registration call, and the latter is safe to ignore.
+      
+      // declare normalized registration functions
+      s.op->newline() << "void unregister_tracepoint_probe_" << i << "(void);";
+      tpop->newline() << "void unregister_tracepoint_probe_" << i << "(void);" << endl;
       tpop->newline() << "void unregister_tracepoint_probe_" << i << "(void) {";
       tpop->newline(1) << "(void) STP_TRACE_UNREGISTER(" << p->tracepoint_name
                        << ", " << enter_fn << ");";
       tpop->newline(-1) << "}";
       tpop->newline();
-
-      // declare normalized registration functions
-      s.op->newline() << "int register_tracepoint_probe_" << i << "(void);";
-      s.op->newline() << "void unregister_tracepoint_probe_" << i << "(void);";
 
       tpop->assert_0_indent();
     }
@@ -12890,6 +12844,7 @@ tracepoint_builder::get_tracequery_modules(systemtap_session& s,
 	  // override DECLARE_TRACE to synthesize probe functions for us
 	  osrc << "#undef DECLARE_TRACE" << endl;
 	  osrc << "#define DECLARE_TRACE(name, proto, args) \\" << endl;
+	  osrc << "  void stapprobe_##name(proto); \\" << endl;
 	  osrc << "  void stapprobe_##name(proto) {}" << endl;
       } else {
 	  if (s.use_bpf_raw_tracepoint) {
@@ -13253,22 +13208,33 @@ register_standard_tapsets(systemtap_session & s)
   s.pattern_root->bind(TOK_KPROBE)->bind_num(TOK_STATEMENT)
       ->bind(TOK_ABSOLUTE)->bind(new kprobe_builder());
 
-  //Hwbkpt based probe
+  //Hwbkpt based kernel probe
   // NB: we formerly registered the probe point types only if the kernel configuration
   // allowed it.  However, we get better error messages if we allow probes to resolve.
   s.pattern_root->bind(TOK_KERNEL)->bind_num(TOK_HWBKPT)
-    ->bind(TOK_HWBKPT_WRITE)->bind(new hwbkpt_builder());
+    ->bind(TOK_HWBKPT_WRITE)->bind(new hwbkpt_builder(true));
   s.pattern_root->bind(TOK_KERNEL)->bind_str(TOK_HWBKPT)
-    ->bind(TOK_HWBKPT_WRITE)->bind(new hwbkpt_builder());
+    ->bind(TOK_HWBKPT_WRITE)->bind(new hwbkpt_builder(true));
   s.pattern_root->bind(TOK_KERNEL)->bind_num(TOK_HWBKPT)
-    ->bind(TOK_HWBKPT_RW)->bind(new hwbkpt_builder());
+    ->bind(TOK_HWBKPT_RW)->bind(new hwbkpt_builder(true));
   s.pattern_root->bind(TOK_KERNEL)->bind_str(TOK_HWBKPT)
-    ->bind(TOK_HWBKPT_RW)->bind(new hwbkpt_builder());
+    ->bind(TOK_HWBKPT_RW)->bind(new hwbkpt_builder(true));
   s.pattern_root->bind(TOK_KERNEL)->bind_num(TOK_HWBKPT)
-    ->bind_num(TOK_LENGTH)->bind(TOK_HWBKPT_WRITE)->bind(new hwbkpt_builder());
+    ->bind_num(TOK_LENGTH)->bind(TOK_HWBKPT_WRITE)->bind(new hwbkpt_builder(true));
   s.pattern_root->bind(TOK_KERNEL)->bind_num(TOK_HWBKPT)
-    ->bind_num(TOK_LENGTH)->bind(TOK_HWBKPT_RW)->bind(new hwbkpt_builder());
+    ->bind_num(TOK_LENGTH)->bind(TOK_HWBKPT_RW)->bind(new hwbkpt_builder(true));
   // length supported with address only, not symbol names
+
+  //Hwbkpt based process probe
+  // NB: we don't support symbol names in the probe spec (yet).
+  s.pattern_root->bind(TOK_PROCESS)->bind_num(TOK_HWBKPT)
+    ->bind(TOK_HWBKPT_WRITE)->bind(new hwbkpt_builder(false));
+  s.pattern_root->bind(TOK_PROCESS)->bind_num(TOK_HWBKPT)
+    ->bind(TOK_HWBKPT_RW)->bind(new hwbkpt_builder(false));
+  s.pattern_root->bind(TOK_PROCESS)->bind_num(TOK_HWBKPT)
+    ->bind_num(TOK_LENGTH)->bind(TOK_HWBKPT_WRITE)->bind(new hwbkpt_builder(false));
+  s.pattern_root->bind(TOK_PROCESS)->bind_num(TOK_HWBKPT)
+    ->bind_num(TOK_LENGTH)->bind(TOK_HWBKPT_RW)->bind(new hwbkpt_builder(false));
 
   //perf event based probe
   register_tapset_perf(s);

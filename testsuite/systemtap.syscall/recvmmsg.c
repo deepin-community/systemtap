@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <sys/syscall.h>
 #include <limits.h>
+#include <sys/mman.h>
 
 static int sfd, ufd;	/* shared between start_server and do_child */
 
@@ -150,6 +151,8 @@ int main()
     char tmpsunpath[1024];
     struct timespec tim = {0, 20000};
 
+    mlockall(MCL_CURRENT);
+
     /* initialize sockaddr's */
     sin1.sin_family = AF_INET;
     sin1.sin_port = htons((getpid() % 32768) + 11000);
@@ -257,11 +260,14 @@ int main()
     recvmmsg(s, msgs, -1, MSG_DONTWAIT, NULL);
     //staptest// recvmmsg (NNNN, XXXX, 4294967295, MSG_DONTWAIT, NULL) = -NNNN (EAGAIN)
 
+// The following SEGVs if compiled as a 32-on-64 bit binary on x86_64 in valid_timespec_to_timespec64()
+#if __WORDSIZE == 64
     recvmmsg(s, msgs, 2, MSG_DONTWAIT, (struct timespec *)-1);
 #ifdef __s390__
     //staptest// recvmmsg (NNNN, XXXX, 2, MSG_DONTWAIT, 0x[7]?[f]+) = -NNNN (EFAULT)
 #else
     //staptest// recvmmsg (NNNN, XXXX, 2, MSG_DONTWAIT, 0x[f]+) = -NNNN (EFAULT)
+#endif
 #endif
 
     close(s);
