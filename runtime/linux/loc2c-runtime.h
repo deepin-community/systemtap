@@ -21,6 +21,7 @@
 #ifdef STAPCONF_ASM_TLBFLUSH_H
 #include <asm/tlbflush.h>
 #endif
+#include <linux/nsproxy.h>
 #define intptr_t long
 #define uintptr_t unsigned long
 
@@ -386,6 +387,13 @@ static void ursl_store64 (const struct usr_regset_lut* lut,unsigned lutsize,  in
 #define __stp_get_user_bad __get_user_bad
 #define __stp_put_user_bad __put_user_bad
 #endif
+
+typedef void (*switch_task_namespaces_fn)(struct task_struct *tsk, struct nsproxy *new);
+typedef void (*create_new_namespaces_fn)(struct task_struct *p, struct nsproxy *new);
+typedef int (*unshare_nsproxy_namespaces_fn)(unsigned long, struct nsproxy **,
+	struct cred *, struct fs_struct *);
+typedef void (*free_nsproxy_fn)(struct nsproxy *ns);
+typedef bool (*proc_ns_file_fn)(const struct file *file);
 
 /*
  * __stp_{get,put}_either take an stp_mm_segment_t parameter
@@ -1007,11 +1015,14 @@ static inline int _stp_store_deref_string_(char *src, void *addr, size_t len,
     {
       for (i = 0; i < len - 1; ++i)
 	{
+	  if (*src == '\0')
+	    break;
 	  err = __stp_put_either(*src++, (u8 *)addr + i, seg);
 	  if (err)
 	    goto out;
 	}
-      err = __stp_put_either('\0', (u8 *)addr + i, seg);
+      /* PR31074: cast (char) '\0' to make sure right size */
+      err = __stp_put_either((char) '\0', (u8 *)addr + i, seg);
     }
 
 out:

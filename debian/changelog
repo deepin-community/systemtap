@@ -1,13 +1,52 @@
-systemtap (5.0-2deepin1) unstable; urgency=medium
+systemtap (5.1-5) unstable; urgency=medium
 
-  * bpf-translate.cxx-fix-build-against-upcoming-gcc14.patch
-  * pr31288-build-with-gcc14-cont.patch
-  * pr31288-build-with-gcc14.patch
-  * pr31373-deal-with-the-removal-of-strlcpy-from-linux-6.8.patch
-  * staprun-fix-build-against-upcoming-gcc14.patch
-  * stapvirt.c-more-gcc-14-werror-calloc-transposed-args-compatibility.patch
+  * Add upstream patch move-unaligned.patch for Linux kernels >= 6.12
+    (Closes: #1108541)
 
- -- LiChengGang <lichenggang@uniontech.com>  Wed, 10 Apr 2024 11:13:11 +0800
+ -- Emanuele Rocca <ema@debian.org>  Tue, 01 Jul 2025 15:52:26 +0200
+
+systemtap (5.1-4.1) unstable; urgency=medium
+
+  * Non-maintainer upload
+  * Drop .git from Vcs-Browser URL
+  * Depend on bind9-dnsutils (Closes: #1094952)
+
+ -- Bastian Germann <bage@debian.org>  Fri, 28 Feb 2025 21:20:54 +0100
+
+systemtap (5.1-4) unstable; urgency=medium
+
+  * Do not fail autopkgtests due to apt-get's output to stderr
+    in build-hello and list-coreutils-probe-points autopkgtests.
+
+ -- Emanuele Rocca <ema@debian.org>  Tue, 20 Aug 2024 20:55:07 +0200
+
+systemtap (5.1-3) unstable; urgency=medium
+
+  * Install coreutils debugging symbols in list-coreutils-probe-points
+    autopkgtest.
+  * Drop "allow-stderr" from build-hello autopkgtest.
+
+ -- Emanuele Rocca <ema@debian.org>  Thu, 15 Aug 2024 17:15:03 +0200
+
+systemtap (5.1-2) unstable; urgency=medium
+
+  * Add upstream patches vmalloc-linux-6.10.patch,
+    stp_task_work-6.10.patch, old-style-declaration-stap-probes.patch and
+    error-empty-body-debug-macros.patch to fix runtime issues with Linux 6.10.
+    (Closes: #1078683)
+  * Add d/patches/debian-debug-system-map.patch to open System.map file shipped
+    by -dbg package instead of /boot/System.map-$version.
+
+ -- Emanuele Rocca <ema@debian.org>  Wed, 14 Aug 2024 12:38:08 +0200
+
+systemtap (5.1-1) unstable; urgency=medium
+
+  * New upstream release. (Closes: #1075549)
+  * Add upstream patch d/patches/symresolution-no-dangling.diff to fix FTBFS on
+    various architectures. Building with g++-12 is not needed anymore.
+    (Closes: #1057205)
+
+ -- Emanuele Rocca <ema@debian.org>  Wed, 03 Jul 2024 16:05:57 +0200
 
 systemtap (5.0-2) unstable; urgency=medium
 

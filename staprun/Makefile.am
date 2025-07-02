@@ -2,8 +2,12 @@
 
 AUTOMAKE_OPTIONS = subdir-objects
 
-AM_CFLAGS = -Wall -Wextra -Werror -Wunused -W -Wformat=2
-AM_CXXFLAGS = -Wall -Wextra -Werror -Wunused -W -Wformat=2
+AM_CFLAGS = -Wall -Wextra -Wunused -W -Wformat=2
+AM_CXXFLAGS = -Wall -Wextra -Wunused -W -Wformat=2
+if Werror
+AM_CFLAGS += -Werror
+AM_CXXFLAGS += -Werror
+endif
 AM_CPPFLAGS = -D_GNU_SOURCE
 AM_CPPFLAGS += -I$(srcdir)/../includes
 AM_CPPFLAGS += -I$(builddir)/../includes/sys
@@ -26,10 +30,10 @@ libstrfloctime_a_CFLAGS = $(AM_CFLAGS) -Wno-format-nonliteral
 staprun_SOURCES = staprun.c staprun_funcs.c ctl.c common.c start_cmd.c \
 	../privilege.cxx ../util.cxx
 staprun_CFLAGS = $(AM_CFLAGS) -DSINGLE_THREADED $(debuginfod_CFLAGS)
-staprun_CXXFLAGS = $(AM_CXXFLAGS) -DSINGLE_THREADED
+staprun_CXXFLAGS = $(AM_CXXFLAGS) -DSINGLE_THREADED $(debuginfod_CFLAGS)
 staprun_CPPFLAGS = $(AM_CPPFLAGS)
 staprun_LDADD = libstrfloctime.a $(staprun_LIBS) $(debuginfod_LIBS)
-staprun_LDFLAGS =  $(AM_LDFLAGS) -Wl,--whole-archive,libstrfloctime.a,--no-whole-archive
+staprun_LDFLAGS =  $(AM_LDFLAGS) -Wl,--whole-archive,libstrfloctime.a,--no-whole-archive $(debuginfod_LDFLAGS)
 
 if HAVE_NSS
 staprun_SOURCES += modverify.c ../nsscommon.cxx

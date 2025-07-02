@@ -48,6 +48,20 @@
 #include <generated/compile.h>
 #endif
 
+// PR31373: Linux 6.8 kernel removed strlcpy
+// This provides equivalent to strlcpy using strscpy
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,8,0)
+#define strlcpy(dest, src, count)  ({		\
+  size_t size=(count);				\
+  ssize_t retval = strscpy((dest), (src), size);\
+  if (retval<0)					\
+    retval = size; /* was truncated */		\
+  else						\
+    retval++; /* count the NULL */		\
+  retval;					\
+})
+#endif
+
 // PR26811: Replace some declarations after set_fs() removal in kernel 5.10+.
 // Should use the STP_* prefixed defines outside of STAPCONF_SET_FS.
 #if defined(STAPCONF_SET_FS)
@@ -70,6 +84,11 @@ static void *kallsyms_copy_to_kernel_nofault;
 /* alas. nmi_access_okay() is not exported by modern kernels */
 static void *kallsyms_nmi_uaccess_okay = NULL;
 #endif
+
+static void *kallsyms_switch_task_namespaces = NULL;
+static void *kallsyms_unshare_nsproxy_namespaces = NULL;
+static void *kallsyms_free_nsproxy = NULL;
+static void *kallsyms_proc_ns_file = NULL;
 
 /* A fallthrough; macro to let the runtime survive -Wimplicit-fallthrough=5 */
 /* from <linux/compiler_attribute.h> */
@@ -434,20 +453,25 @@ static int stap_init_module (void)
      map hash. */
   get_random_bytes(&stap_hash_seed, sizeof (stap_hash_seed));
   systemtap_wq = alloc_workqueue("systemtap-wq",
-		WQ_UNBOUND | WQ_MEM_RECLAIM, 0);
+		WQ_UNBOUND, 0);
   if (!systemtap_wq)
-    return !systemtap_wq;
+    return -ENOMEM;
   rc = systemtap_kernel_module_init();
-  if (rc)
+  if (rc){
+    destroy_workqueue(systemtap_wq);
     return rc;
+  }
   rc = _stp_transport_init();
-  if (rc)
+  if (rc){
     systemtap_kernel_module_exit();
+    destroy_workqueue(systemtap_wq);
+  }
   return rc;
 }
 
 module_init(stap_init_module);
 
+void stap_cleanup_module(void);
 void stap_cleanup_module(void)
 {
   _stp_transport_close();
@@ -455,8 +479,7 @@ void stap_cleanup_module(void)
      due to tapset-procfs.cxx cleaning up after procfs probes (such
      as in --monitor mode).  */
   systemtap_kernel_module_exit();
-  if (systemtap_wq)
-    destroy_workqueue(systemtap_wq);
+  destroy_workqueue(systemtap_wq);
 }
 
 module_exit(stap_cleanup_module);

@@ -3,9 +3,10 @@ suggest-readme.debian.diff
 dtrace-no-std-include-path.diff
 stap-prep.patch
 systemtap-ia64.patch
-staprun-fix-build-against-upcoming-gcc14.patch
-bpf-translate.cxx-fix-build-against-upcoming-gcc14.patch
-stapvirt.c-more-gcc-14-werror-calloc-transposed-args-compatibility.patch
-pr31288-build-with-gcc14.patch
-pr31288-build-with-gcc14-cont.patch
-pr31373-deal-with-the-removal-of-strlcpy-from-linux-6.8.patch
+symresolution-no-dangling.diff
+vmalloc-linux-6.10.patch
+stp_task_work-6.10.patch
+error-empty-body-debug-macros.patch
+old-style-declaration-stap-probes.patch
+debian-debug-system-map.patch
+move-unaligned.patch

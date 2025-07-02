@@ -1,0 +1,26 @@
+commit c5774e18b7241cc484ef9d5e17214651b9b9d439
+Author: William Cohen <wcohen@redhat.com>
+Date:   Mon Oct 7 11:27:10 2024 -0400
+
+    Address the Linux 6.12 move of the unaligned.h include file
+    
+    The Linux git commit 5f60d5f6bb moved unaligned.h from asm/unaligned.h
+    to linux/unaligned.h.  Adjusted runtime/sym.c to include the
+    unaligned.h from the appropriate location.
+
+diff --git a/runtime/sym.c b/runtime/sym.c
+index 102257965..acae95818 100644
+--- a/runtime/sym.c
++++ b/runtime/sym.c
+@@ -18,7 +18,11 @@
+ #ifdef STP_NEED_LINE_DATA
+ #include "unwind/unwind.h"
+ #endif
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,12,0)
++#include <linux/unaligned.h>
++#else
+ #include <asm/unaligned.h>
++#endif
+ #include <asm/uaccess.h>
+ #include <linux/list.h>
+ #include <linux/module.h>

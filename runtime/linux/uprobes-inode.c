@@ -17,6 +17,7 @@
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/uprobes.h>
+#include <linux/fs_struct.h>
 
 /* STAPIU: SystemTap Inode Uprobes */
 
@@ -465,6 +466,7 @@ stapiu_init(struct stapiu_consumer *consumers, size_t nconsumers)
 {
   int ret = 0;
   size_t i;
+  bool mnt_ns_switched = false;
 
   might_sleep();
 
@@ -499,6 +501,12 @@ stapiu_init(struct stapiu_consumer *consumers, size_t nconsumers)
         break;
       }
 
+      if (!mnt_ns_switched) {
+	ret = stap_switch_to_target_mnt_ns_if_needed(&mnt_ns_switched);
+	if (unlikely(ret != 0))
+          break;
+      }
+
       /* NB Alas. we cannot check build id here since we do not have loaded
        * memory pages to work with at this early stage. Fortunately, one
        * advantage of the early uprobe registration is that we can ensure
@@ -528,7 +536,37 @@ stapiu_init(struct stapiu_consumer *consumers, size_t nconsumers)
     }
   }
 
+  if (mnt_ns_switched) {
+    int rc;
+
+    rc = stap_switch_to_orig_mnt_ns_if_needed();
+    if (unlikely(rc != 0)) {
+      int j, n;
+
+      n = ret != 0 ? i + 1 : nconsumers;
+      for (j = 0; j < n; ++j) {
+        struct stapiu_consumer *c = &consumers[j];
+        // protect against conceivable stapiu_refresh() at same time
+        mutex_lock(& c->consumer_lock);
+        stapiu_consumer_unreg(c);
+        mutex_unlock(& c->consumer_lock);
+      }
+
+      return rc;
+    }
+  }
+
   if (unlikely(ret != 0)) {
+    for ( ;; ) {
+      struct stapiu_consumer *c = &consumers[i];
+      // protect against conceivable stapiu_refresh() at same time
+      mutex_lock(& c->consumer_lock);
+      stapiu_consumer_unreg(c);
+      mutex_unlock(& c->consumer_lock);
+      if (i == 0)
+        break;
+      i--;
+    }
     return ret;
   }
 
@@ -545,7 +583,27 @@ stapiu_init(struct stapiu_consumer *consumers, size_t nconsumers)
       break;
     }
   }
-  return ret;
+
+  if (unlikely(ret != 0)) {
+    int j;
+    for (j = 0; j < nconsumers; ++j) {
+      struct stapiu_consumer *c = &consumers[j];
+      // protect against conceivable stapiu_refresh() at same time
+      mutex_lock(& c->consumer_lock);
+      stapiu_consumer_unreg(c);
+      mutex_unlock(& c->consumer_lock);
+    }
+    for ( ;; ) {
+      struct stapiu_consumer *c = &consumers[i];
+      stap_cleanup_task_finder_target(&c->finder);
+      if (i == 0)
+        break;
+      i--;
+    }
+    return ret;
+  }
+
+  return 0;
 }
 
 

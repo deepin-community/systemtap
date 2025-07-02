@@ -1,0 +1,78 @@
+From 0c437c7e2d02772615d73d1be1c3100d4c1de254 Mon Sep 17 00:00:00 2001
+From: William Cohen <wcohen@redhat.com>
+Date: Tue, 4 Jun 2024 09:46:41 -0400
+Subject: [PATCH] Address changes in Linux 6.10 /include/linux/vmalloc.h
+
+Upstream linux kernel git commit 88ae5fb755b0d contains a number of
+changes in /include/linux/vmalloc.h that affect vmalloc, vmalloc_node,
+and vzalloc_node definitions.  These are no longer functions but
+macros and cannot be found in the list of symbols exported by the
+kernel.  Support for vzalloc, vmalloc_node, and vzalloc_node has been
+in kernels since Linux 2.6.37.  Given that systemtap requires Linux
+3.10 or newer there is no longer a need to check for the existence of
+these functions or provide local versions of them.
+---
+ buildrun.cxx          |  3 ---
+ runtime/linux/alloc.c | 28 ----------------------------
+ 2 files changed, 31 deletions(-)
+
+Index: systemtap/buildrun.cxx
+===================================================================
+--- systemtap.orig/buildrun.cxx
++++ systemtap/buildrun.cxx
+@@ -508,9 +508,6 @@ compile_pass (systemtap_session& s)
+   output_exportconf(s, o2, "kallsyms_lookup_name", "STAPCONF_KALLSYMS_LOOKUP_NAME_EXPORTED");
+   output_autoconf(s, o, cs, "autoconf-uidgid.c", "STAPCONF_LINUX_UIDGID_H", NULL);
+   output_exportconf(s, o2, "sigset_from_compat", "STAPCONF_SIGSET_FROM_COMPAT_EXPORTED");
+-  output_exportconf(s, o2, "vzalloc", "STAPCONF_VZALLOC");
+-  output_exportconf(s, o2, "vzalloc_node", "STAPCONF_VZALLOC_NODE");
+-  output_exportconf(s, o2, "vmalloc_node", "STAPCONF_VMALLOC_NODE");
+ 
+   // RHBZ1233912 - s390 temporary workaround for non-atomic udelay()
+   output_exportconf(s, o2, "udelay_simple", "STAPCONF_UDELAY_SIMPLE_EXPORTED");
+Index: systemtap/runtime/linux/alloc.c
+===================================================================
+--- systemtap.orig/runtime/linux/alloc.c
++++ systemtap/runtime/linux/alloc.c
+@@ -404,16 +404,6 @@ static void *_stp_kzalloc(size_t size)
+   return _stp_kzalloc_gfp(size, STP_ALLOC_FLAGS);
+ }
+ 
+-#ifndef STAPCONF_VZALLOC
+-static void *vzalloc(unsigned long size)
+-{
+-	void *ret = vmalloc(size);
+-	if (ret)
+-		memset(ret, 0, size);
+-	return ret;
+-}
+-#endif
+-
+ static void *_stp_vzalloc(size_t size)
+ {
+ 	void *ret;
+@@ -438,24 +428,6 @@ static void *_stp_vzalloc(size_t size)
+ 	return ret;
+ }
+ 
+-
+-#ifndef STAPCONF_VMALLOC_NODE
+-static void *vmalloc_node(unsigned long size, int node __attribute__((unused)))
+-{
+-	return vmalloc(size);
+-}
+-#endif
+-
+-#ifndef STAPCONF_VZALLOC_NODE
+-static void *vzalloc_node(unsigned long size, int node)
+-{
+-	void *ret = vmalloc_node(size, node);
+-	if (ret)
+-		memset(ret, 0, size);
+-	return ret;
+-}
+-#endif
+-
+ static void *_stp_vzalloc_node(size_t size, int node)
+ {
+ 	void *ret;
