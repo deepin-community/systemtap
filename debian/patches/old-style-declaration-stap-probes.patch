@@ -1,0 +1,32 @@
+commit de8aba9a414b497d98c489173b878058c4031b39
+Author: William Cohen <wcohen@redhat.com>
+Date:   Mon Jun 3 14:40:04 2024 -0400
+
+    Avoid -Werror=old-style-declaration for stap_probes array in generated kernel modules
+    
+    With newer linux kernels additional compilers checks are being done
+    and will get error messages like the following for the generated
+    module:
+    
+    /tmp/stapuundLy/stap_2755fca707746de04395c85872aae4b8_1753_src.c:111:1: error: 'static' is not at beginning of declaration [-Werror=old-style-declaration]
+      111 | } static stap_probes[];
+          | ^
+    cc1: all warnings being treated as errors
+    
+    Tweaked the code generation in translate.cxx to output the static
+    stap_probes array in a form that is agreeable to newer kernel builds.
+
+Index: systemtap/translate.cxx
+===================================================================
+--- systemtap.orig/translate.cxx
++++ systemtap/translate.cxx
+@@ -8742,7 +8742,8 @@ translate_pass (systemtap_session& s)
+                       << "STAP_PROBE_INIT_NAME(PN) "
+                       << "STAP_PROBE_INIT_TIMING(L, D) "
+                       << "}";
+-      s.op->newline(-1) << "} static stap_probes[];";
++      s.op->newline(-1) << "};";
++      s.op->newline() << "static struct stap_probe stap_probes[];";
+       s.op->assert_0_indent();
+ #undef CALCIT
+ 

@@ -17,8 +17,12 @@ AM_CPPFLAGS = -DBINDIR='"$(bindir)"' \
               -DPY3EXECDIR='"$(py3execdir)"' \
 	      -I$(srcdir)/includes -I$(builddir)/includes/sys
 
-AM_CFLAGS = -D_GNU_SOURCE -fexceptions -Wall -Wextra -Werror -Wunused -Wformat=2 -W
-AM_CXXFLAGS = -Wall -Wextra -Werror
+AM_CFLAGS = -D_GNU_SOURCE -fexceptions -Wall -Wextra -Wunused -Wformat=2 -W
+AM_CXXFLAGS = -Wall -Wextra
+if Werror
+AM_CFLAGS += -Werror
+AM_CXXFLAGS += -Werror
+endif
 
 bin_SCRIPTS = stap-report stap-profile-annotate
 pkglibexec_SCRIPTS = stap-env
@@ -141,6 +145,10 @@ stap_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ @ALIGNEDNEW@ @debuginfod_CFLAGS@
 stap_CPPFLAGS = $(AM_CPPFLAGS) -DSTAP_SDT_V2
 stap_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@ @BOOST_SYSTEM_LIB@
 
+if HAVE_DYNINST
+stap_CXXFLAGS += $(DYNINST_CXXFLAGS)
+endif
+
 if HAVE_AVAHI
 stap_CXXFLAGS += $(avahi_CFLAGS)
 stap_CPPFLAGS += $(avahi_CFLAGS)
@@ -157,10 +165,6 @@ stap_CFLAGS += $(nss_CFLAGS) -DSTAP
 stap_CXXFLAGS += $(nss_CFLAGS)
 stap_CPPFLAGS += $(nss_CFLAGS)
 stap_LDADD += $(nss_LIBS)
-
-if HAVE_DYNINST
-stap_CXXFLAGS += $(DYNINST_CXXFLAGS)
-endif
 
 install-exec-local: install-scripts
 
@@ -188,9 +192,9 @@ if BUILD_TRANSLATOR
 if HAVE_NSS
 stap_sign_module_SOURCES = stap-sign-module.cxx nsscommon.cxx util.cxx
 stap_sign_module_CPPFLAGS = $(AM_CPPFLAGS)
-stap_sign_module_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ $(nss_CFLAGS)
+stap_sign_module_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ $(nss_CFLAGS) $(debuginfod_CFLAGS)
 stap_sign_module_CFLAGS = $(AM_CFLAGS) @PIECFLAGS@ $(nss_CFLAGS) $(debuginfod_CFLAGS)
-stap_sign_module_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@
+stap_sign_module_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@ $(debuginfod_LDFLAGS)
 stap_sign_module_LDADD = $(nss_LIBS) $(debuginfod_LIBS)
 if HAVE_HTTP_SUPPORT
 stap_sign_module_LDADD += $(openssl_LIBS)
@@ -198,9 +202,9 @@ endif
 
 stap_authorize_cert_SOURCES = stap-authorize-cert.cxx nsscommon.cxx util.cxx
 stap_authorize_cert_CPPFLAGS = $(AM_CPPFLAGS)
-stap_authorize_cert_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ $(nss_CFLAGS)
+stap_authorize_cert_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ $(nss_CFLAGS) $(debuginfod_CFLAGS)
 stap_authorize_cert_CFLAGS = $(AM_CFLAGS) @PIECFLAGS@ $(nss_CFLAGS) $(debuginfod_CFLAGS)
-stap_authorize_cert_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@
+stap_authorize_cert_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@ $(debuginfod_LDFLAGS)
 stap_authorize_cert_LDADD = $(nss_LIBS) $(debuginfod_LIBS)
 if HAVE_HTTP_SUPPORT
 stap_authorize_cert_LDADD += $(openssl_LIBS)
@@ -208,9 +212,9 @@ endif
 
 if BUILD_SERVER
 stap_serverd_SOURCES = stap-serverd.cxx cscommon.cxx util.cxx privilege.cxx nsscommon.cxx cmdline.cxx
-stap_serverd_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ $(nss_CFLAGS)
+stap_serverd_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ $(nss_CFLAGS) $(debuginfod_CFLAGS)
 stap_serverd_CFLAGS = $(AM_CFLAGS) @PIECFLAGS@ $(nss_CFLAGS) $(debuginfod_CFLAGS)
-stap_serverd_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@
+stap_serverd_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@ $(debuginfod_LDFLAGS)
 stap_serverd_LDADD = $(nss_LIBS) -lpthread $(debuginfod_LIBS)
 if HAVE_AVAHI
 stap_serverd_CFLAGS += $(avahi_CFLAGS)
@@ -223,9 +227,9 @@ endif
 
 
 stap_gen_cert_SOURCES = stap-gen-cert.cxx util.cxx nsscommon.cxx
-stap_gen_cert_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ $(nss_CFLAGS)
+stap_gen_cert_CXXFLAGS = $(AM_CXXFLAGS) @PIECXXFLAGS@ $(nss_CFLAGS) $(debuginfod_CFLAGS)
 stap_gen_cert_CFLAGS = $(AM_CFLAGS) @PIECFLAGS@ $(nss_CFLAGS) $(debuginfod_CFLAGS)
-stap_gen_cert_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@
+stap_gen_cert_LDFLAGS = $(AM_LDFLAGS) @PIELDFLAGS@ $(debuginfod_LDFLAGS)
 stap_gen_cert_LDADD = $(nss_LIBS) $(debuginfod_LIBS)
 if HAVE_HTTP_SUPPORT
 stap_gen_cert_LDADD += $(openssl_LIBS)
@@ -277,14 +281,10 @@ endif
 		do $(INSTALL_DATA) -D $$f $(DESTDIR)$(pkgdatadir)/runtime/softfloat/$$f; done)
 	(cd $(srcdir)/runtime/linux; for f in *.[ch]; \
 		do $(INSTALL_DATA) -D $$f $(DESTDIR)$(pkgdatadir)/runtime/linux/$$f; done)
-	(cd $(srcdir)/runtime/linux/uprobes; for f in Makefile *.[ch]; \
-		do $(INSTALL_DATA) -D $$f $(DESTDIR)$(pkgdatadir)/runtime/linux/uprobes/$$f; done)
-	(cd $(srcdir)/runtime/linux/uprobes2; for f in *.[ch]; \
-		do $(INSTALL_DATA) -D $$f $(DESTDIR)$(pkgdatadir)/runtime/linux/uprobes2/$$f; done)
 	(cd $(srcdir)/tapset; find . \( -name '*.stp' -o -name '*.stpm' -o -name README \) -print \
 		| while read f; do $(INSTALL_DATA) -D $$f $(DESTDIR)$(pkgdatadir)/tapset/$$f; done)
 	(cd $(srcdir)/testsuite/systemtap.examples; find . -type f -print \
-		| egrep -v 'check.exp|ChangeLog|examples-index-gen.pl|html/.*\.tmpl|metadatabase.dbq$$' \
+		| grep -E -v 'check.exp|ChangeLog|examples-index-gen.pl|html/.*\.tmpl|metadatabase.dbq$$' \
 		| while read f; do if test -x $$f; then \
 			i_cmd="$(INSTALL_PROGRAM)"; else \
 			i_cmd="$(INSTALL_DATA)"; fi; \
@@ -444,7 +444,7 @@ install-uprobes:
 .PHONY: $(PHONIES)
 
 dist-gzip:
-	cd $(srcdir); git status | egrep 'working.(tree|directory).clean' || (echo "You should commit your changes before 'make rpm'.")
+	cd $(srcdir); git status | grep -E 'working.(tree|directory).clean' || (echo "You should commit your changes before 'make rpm'.")
 	(cd $(srcdir); git archive --prefix=systemtap-$(VERSION)/ --format=tar HEAD) | gzip > systemtap-$(VERSION).tar.gz
 
 rpm: dist-gzip

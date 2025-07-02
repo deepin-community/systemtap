@@ -33,8 +33,7 @@ override_dh_auto_test:
 	# Tests cannot be run during build, see #526957
 
 override_dh_auto_configure:
-	# Build with g++-12 (see #1057205)
-	dh_auto_configure -- CXX=g++-12 $(CONF_FLAGS)
+	dh_auto_configure -- $(CONF_FLAGS)
 
 override_dh_auto_install:
 	dh_auto_install

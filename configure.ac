@@ -1,7 +1,7 @@
 dnl configure.ac --- autoconf input file for systemtap
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT([systemtap],[5.0],[systemtap@sourceware.org],[systemtap])
+AC_INIT([systemtap],[5.1],[systemtap@sourceware.org],[systemtap])
 dnl                  ^^^ see also NEWS, systemtap.spec, testsuite/configure.ac
 dnl                      doc/SystemTap_Beginners_Guide/en-US/Book_Info.xml
 
@@ -123,6 +123,13 @@ fi
 # the subconfigure in the testsuite directory.
 AS_VAR_APPEND([ac_configure_args], [" python3='$PYTHON3' py3execdir='$ac_cv_py3execdir'"])
 
+dnl Allow the build to exclude -Werror
+AC_MSG_CHECKING([whether to build with -Werror])
+AC_ARG_ENABLE([Werror],
+        AS_HELP_STRING('[--enable-Werror], [compile with -Werror flags]))
+AS_IF([test "${enable_Werror}" != "no"], [AC_MSG_RESULT([yes])], [AC_MSG_RESULT([no])])
+AM_CONDITIONAL([Werror], [test "${enable_Werror}" != "no"])
+
 dnl Handle the prologues option.
 dnl
 dnl If the user didn't specify --enable-prologues/--disable-prologues
@@ -219,12 +226,11 @@ dnl take the user at his or her word
 elif test "x$with_debuginfod" != xno; then
 dnl check in the system pkgconfig
   PKG_CHECK_MODULES([debuginfod], [libdebuginfod >= 0.179],
-    [have_debuginfod=1],
+    [have_debuginfod=1
+     AC_DEFINE([HAVE_LIBDEBUGINFOD], [1], [Define to 1 if debuginfod is enabled.])],
     [if test "x$with_debuginfod" = xyes; then
        AC_MSG_ERROR(["--with-debuginfod was given, but libdebuginfod is missing or unusable."])
      fi])
-  AC_DEFINE([HAVE_LIBDEBUGINFOD], [1], [Define to 1 if debuginfod is enabled.])
-  AC_MSG_RESULT([yes])  
 else
   AC_MSG_RESULT([no])
 fi
@@ -644,9 +650,11 @@ AC_ARG_WITH([dyninst],
 case "$with_dyninst" in
 no) ;;
 ''|yes) # Try a simple-minded distro search
-     DYNINST_CXXFLAGS=""
+     DYNINST_CXXFLAGS="-I/usr/include/dyninst"
      old_LIBS="$LIBS"
      old_LDFLAGS="$LDFLAGS"
+     old_CPPFLAGS="$CPPFLAGS"
+     CPPFLAGS="$CPPFLAGS $DYNINST_CXXFLAGS"
      AC_LANG_PUSH(C++)
      for location in /usr/lib64/dyninst /usr/lib/dyninst ${libdir}/dyninst; do
        LDFLAGS="-L${location}"
@@ -661,6 +669,7 @@ no) ;;
        fi
      done
      AC_LANG_POP(C++)
+     CPPFLAGS="$old_CPPFLAGS"
      LDFLAGS="$old_LDFLAGS"
      LIBS="$old_LIBS"
 
@@ -673,7 +682,7 @@ no) ;;
      fi
      ;;
 *)  # Use paths in the user-specified prefix
-    DYNINST_CXXFLAGS="-I$with_dyninst/include"
+    DYNINST_CXXFLAGS="-I$with_dyninst/include -I$with_dyninst/include/dyninst"
     DYNINST_LDFLAGS="-L$with_dyninst/lib64/dyninst -Wl,-rpath-link,$with_dyninst/lib64/dyninst"
     # Will assume Dyninst libraries are available as the path is specified
     save_LIBS="$LIBS"

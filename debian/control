@@ -22,12 +22,11 @@ Build-Depends: debhelper (>= 13),
                xmlto,
                python3-lxml,
                latex2html,
-               libavahi-client-dev,
-               g++-12
+               libavahi-client-dev
 Standards-Version: 4.6.0
 Homepage: http://sourceware.org/systemtap/
 Vcs-Git: https://salsa.debian.org/debian/systemtap.git
-Vcs-Browser: https://salsa.debian.org/debian/systemtap.git
+Vcs-Browser: https://salsa.debian.org/debian/systemtap
 
 Package: systemtap
 Architecture: linux-any
@@ -104,7 +103,7 @@ Description: instrumentation system for Linux (compile server)
 
 Package: systemtap-client
 Architecture: linux-any
-Depends: avahi-utils, unzip, zip, dnsutils, systemtap-runtime (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
+Depends: avahi-utils, unzip, zip, bind9-dnsutils, systemtap-runtime (= ${binary:Version}), ${shlibs:Depends}, ${misc:Depends}
 Suggests: systemtap-server
 Description: instrumentation system for Linux (client for compile server)
  This package contains client for SystemTap compile server. It can be
